@@ -1,0 +1,1056 @@
+import { useState, useEffect, useRef, useCallback } from 'react';
+import { TypstDocument } from '@myriaddreamin/typst.react';
+import { type TypstCompiler, createTypstCompiler, preloadRemoteFonts, MemoryAccessModel, initOptions } from '@myriaddreamin/typst.ts';
+import { useChat } from 'ai/react';
+import Editor, { type OnMount } from '@monaco-editor/react';
+import * as monaco from 'monaco-editor';
+import {
+  Send, Bot, Code2, Eye, Database,
+  PanelLeftClose, PanelLeft, Loader2,
+  FileCode, Sparkles, AlertCircle,
+  ZoomIn, ZoomOut, RotateCcw, Maximize2,
+  Sun, Moon, Monitor,
+  Bold, Italic, Underline, Heading, List, ListOrdered, Code
+} from 'lucide-react';
+import { useTheme, THEMES } from './hooks/useTheme';
+
+// =============================================================================
+// 🌌 Typst Universe 插件预加载 (编译时静态分析)
+// =============================================================================
+// 使用 Vite 的 glob 功能在编译时扫描并打包所有文件
+// eager: true - 同步加载，打包进 bundle
+// query: '?raw' - 作为纯文本字符串导入
+
+// 加载所有 .typ 源文件
+const universeTypFiles = import.meta.glob('./universe/**/*.typ', {
+  query: '?raw',
+  import: 'default',
+  eager: true
+});
+
+// 加载所有 typst.toml 包清单文件
+const universeTomlFiles = import.meta.glob('./universe/**/typst.toml', {
+  query: '?raw',
+  import: 'default',
+  eager: true
+});
+
+// 加载所有 .js 脚本文件 (如 cades 包需要的 qrcode.js)
+const universeJsFiles = import.meta.glob('./universe/**/*.js', {
+  query: '?raw',
+  import: 'default',
+  eager: true
+});
+
+// 加载所有 .wasm 二进制文件 (获取 URL，稍后异步 fetch)
+const universeWasmUrls = import.meta.glob('./universe/**/*.wasm', {
+  query: '?url',
+  import: 'default',
+  eager: true
+});
+
+// 合并文本文件并转换为虚拟路径映射
+// 注意: 使用 /@memory/packages/ 前缀，这是 MemoryAccessModel 要求的格式
+const universeTextPackages = Object.entries({ ...universeTypFiles, ...universeTomlFiles, ...universeJsFiles }).reduce<Record<string, string>>((acc, [filePath, content]) => {
+  const match = filePath.match(/\.?\/universe\/(.+)$/);
+  if (match) {
+    const virtualPath = `/@memory/packages/${match[1]}`;
+    acc[virtualPath] = content as string;
+  }
+  return acc;
+}, {});
+
+// 构建 WASM 文件的虚拟路径映射 (值是 URL，需要异步加载)
+const universeWasmPaths = Object.entries(universeWasmUrls).reduce<Record<string, string>>((acc, [filePath, url]) => {
+  const match = filePath.match(/\.?\/universe\/(.+)$/);
+  if (match) {
+    const virtualPath = `/@memory/packages/${match[1]}`;
+    acc[virtualPath] = url as string;
+  }
+  return acc;
+}, {});
+
+// 异步加载所有 WASM 文件并返回合并后的包数据
+let wasmLoadPromise: Promise<Record<string, Uint8Array>> | null = null;
+async function loadWasmPackages() {
+  // 只加载一次
+  if (wasmLoadPromise) return wasmLoadPromise;
+
+  wasmLoadPromise = (async () => {
+    const wasmData: Record<string, Uint8Array> = {};
+    for (const [virtualPath, url] of Object.entries(universeWasmPaths)) {
+      try {
+        const response = await fetch(url);
+        if (response.ok) {
+          const buffer = await response.arrayBuffer();
+          wasmData[virtualPath] = new Uint8Array(buffer);
+          console.log(`📦 已加载 WASM: ${virtualPath}`);
+        }
+      } catch (err) {
+        console.warn(`⚠️ 无法加载 WASM: ${virtualPath}`, err);
+      }
+    }
+    return wasmData;
+  })();
+
+  return wasmLoadPromise;
+}
+
+// 初始包数据 (文本文件)，WASM 文件将在运行时异步合并
+let universePackages = { ...universeTextPackages };
+
+// 🌌 自定义 PackageRegistry - 从打包的 bundle 中解析 @preview 包
+class BundledPackageRegistry {
+  packages: Record<string, string | Uint8Array>;
+  am: MemoryAccessModel;
+  resolved: Set<string>;
+
+  constructor(packages: Record<string, string | Uint8Array>, accessModel: MemoryAccessModel) {
+    this.packages = packages;
+    this.am = accessModel;
+    this.resolved = new Set();
+  }
+
+  resolve(spec: { namespace: string; name: string; version: string }, _context: any) {
+    // 只处理 preview 命名空间
+    if (spec.namespace !== 'preview') {
+      return undefined;
+    }
+
+    // 使用 /@memory/packages/ 前缀
+    const packageDir = `/@memory/packages/preview/${spec.name}/${spec.version}`;
+
+    // 检查是否已经解析过
+    if (this.resolved.has(packageDir)) {
+      return packageDir;
+    }
+
+    // 检查包是否存在于 bundle 中
+    const tomlPath = `${packageDir}/typst.toml`;
+    if (!this.packages[tomlPath]) {
+      console.warn(`📦 包 @preview/${spec.name}:${spec.version} 未在本地 Universe 中找到`);
+      return undefined;
+    }
+
+    // 将包文件注册到 AccessModel
+    const encoder = new TextEncoder();
+    for (const [path, content] of Object.entries(this.packages)) {
+      if (path.startsWith(packageDir)) {
+        // 将字符串内容转换为 Uint8Array
+        const data = typeof content === 'string' ? encoder.encode(content) : content;
+        this.am.insertFile(path, data, new Date());
+      }
+    }
+
+    this.resolved.add(packageDir);
+    console.log(`📦 已加载包: @preview/${spec.name}:${spec.version}`);
+    return packageDir;
+  }
+}
+
+// 🌌 模块级单例 - 避免组件重新挂载时重复加载包
+const sharedAccessModel = new MemoryAccessModel();
+const sharedPackageRegistry = new BundledPackageRegistry(universePackages, sharedAccessModel);
+
+// 确保 WASM 文件已加载 (只加载一次)
+let wasmLoaded = false;
+async function ensureWasmLoaded() {
+  if (wasmLoaded) return;
+
+  const wasmData = await loadWasmPackages();
+  // 合并 WASM 数据到 universePackages
+  Object.assign(universePackages, wasmData);
+  // 同时更新 PackageRegistry 的引用
+  sharedPackageRegistry.packages = universePackages;
+  wasmLoaded = true;
+
+  if (Object.keys(wasmData).length > 0) {
+    console.log('📦 WASM 文件合并完成:', Object.keys(wasmData));
+  }
+}
+
+// 将 JSON 值转换为 Typst 字面量语法
+const jsonToTypst = (value: any): string => {
+  if (value === null || value === undefined) {
+    return 'none';
+  }
+  if (typeof value === 'string') {
+    return `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+  }
+  if (typeof value === 'number') {
+    return String(value);
+  }
+  if (typeof value === 'boolean') {
+    return value ? 'true' : 'false';
+  }
+  if (Array.isArray(value)) {
+    const items = value.map(jsonToTypst).join(', ');
+    return `(${items})`;
+  }
+  if (typeof value === 'object') {
+    const entries = Object.entries(value)
+      .map(([k, v]) => `${k}: ${jsonToTypst(v)}`)
+      .join(', ');
+    return `(${entries})`;
+  }
+  return String(value);
+};
+
+// 配置 Typst 渲染器 WASM 路径 (0.6.0 全局配置)
+TypstDocument.setWasmModuleInitOptions({
+  getModule: () => ({
+    module_or_path: fetch('/assets/typst_ts_renderer_bg.wasm').then(res => res.arrayBuffer())
+  }),
+  beforeBuild: []
+});
+
+// Typst WASM 渲染器组件 - PDF 阅读器风格预览
+const TypstPreview = ({ code, data }: { code: string; data: any }) => {
+  const [compiler, setCompiler] = useState<TypstCompiler | null>(null);
+  const [artifact, setArtifact] = useState<Uint8Array | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  // 缩放状态
+  const [zoom, setZoom] = useState(1); // 100% = 1
+  const containerRef = useRef<HTMLDivElement>(null);
+  const documentRef = useRef<HTMLDivElement>(null);
+
+  // 缩放控制函数
+  const zoomIn = useCallback(() => {
+    setZoom(prev => Math.min(prev + 0.25, 3)); // 最大 300%
+  }, []);
+
+  const zoomOut = useCallback(() => {
+    setZoom(prev => Math.max(prev - 0.25, 0.25)); // 最小 25%
+  }, []);
+
+  const resetZoom = useCallback(() => {
+    setZoom(1); // 重置为 100%
+  }, []);
+
+  const fitToWidth = useCallback(() => {
+    if (!containerRef.current || !documentRef.current) return;
+
+    // 获取容器可用宽度（减去 padding）
+    const containerWidth = containerRef.current.clientWidth - 64; // 32px padding each side
+    // 获取文档原始宽度
+    const documentWidth = documentRef.current.scrollWidth / zoom;
+
+    if (documentWidth > 0) {
+      const newZoom = Math.min(containerWidth / documentWidth, 2); // 最大适应到 200%
+      setZoom(Math.max(newZoom, 0.25));
+    }
+  }, [zoom]);
+
+  // 初始化编译器
+  useEffect(() => {
+    let mounted = true;
+    const initCompiler = async () => {
+      try {
+        const comp = createTypstCompiler();
+
+        // 加载字体
+        let fontDataList: Uint8Array[] = [];
+        try {
+          const fontFiles = [
+            'DejaVuSansMono-Bold.ttf',
+            'DejaVuSansMono.ttf',
+            'LibertinusSans-Bold.otf',
+            'LibertinusSans-Italic.otf',
+            'LibertinusSans-Regular.otf',
+            'LibertinusSerif-Bold.otf',
+            'LibertinusSerif-BoldItalic.otf',
+            'LibertinusSerif-Italic.otf',
+            'LibertinusSerif-Regular.otf',
+            'NewCMMath-Book.otf',
+            'NotoSansSC-Bold.ttf',
+            'NotoSansSC-Regular.ttf',
+            'NotoSerifSC-Bold.ttf',
+            'NotoSerifSC-Regular.ttf'
+          ];
+
+          console.log(`正在加载 ${fontFiles.length} 个字体...`);
+
+          const fontPromises = fontFiles.map(async (file) => {
+            try {
+              const res = await fetch(`/fonts/${file}`);
+              if (!res.ok) throw new Error(`HTTP ${res.status}`);
+              const buffer = await res.arrayBuffer();
+              return new Uint8Array(buffer);
+            } catch (e) {
+              console.error(`Failed to load font ${file}:`, e);
+              return null;
+            }
+          });
+
+          const results = await Promise.all(fontPromises);
+          fontDataList = results.filter(f => f !== null);
+          console.log(`成功加载 ${fontDataList.length}/${fontFiles.length} 个字体`);
+
+        } catch (fontErr) {
+          console.error('Fatal error loading fonts:', fontErr);
+        }
+
+        // 确保 WASM 文件已加载 (如 jogs.wasm)
+        await ensureWasmLoaded();
+
+        // 使用模块级共享实例
+        await comp.init({
+          getModule: () => ({
+            module_or_path: fetch('/assets/typst_ts_web_compiler_bg.wasm').then(res => res.arrayBuffer())
+          }),
+          beforeBuild: [
+            preloadRemoteFonts(fontDataList),
+            initOptions.withAccessModel(sharedAccessModel),
+            initOptions.withPackageRegistry(sharedPackageRegistry)
+          ]
+        });
+
+        console.log('📦 Universe 包注册完成，可用包:', Object.keys(universePackages).filter(p => p.endsWith('typst.toml')).map(p => p.replace('/@memory/packages/', '@').replace('/typst.toml', '').replace('/', ':')));
+
+        if (mounted) {
+          setCompiler(comp);
+          setLoading(false);
+        }
+      } catch (err) {
+        console.error('Failed to init compiler:', err);
+        if (mounted) {
+          setError(`引擎初始化失败: ${err instanceof Error ? err.message : String(err)}`);
+          setLoading(false);
+        }
+      }
+    };
+
+    initCompiler();
+    return () => { mounted = false; };
+  }, []);
+
+  // 编译代码
+  useEffect(() => {
+    if (!compiler || !code) return;
+
+    const compile = async () => {
+      try {
+        // 构建完整代码 - 使用 JSON 数据注入
+        // 使用 Typst 内置的 json.decode 解析 JSON 字符串，比手动拼接字符串更健壮
+        const dataCode = `#let data = json.decode("${JSON.stringify(data).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}")\n`;
+        const fullCode = dataCode + code;
+
+        // 编译
+        const mainFilePath = '/main.typ';
+        compiler.addSource(mainFilePath, fullCode);
+        const compileResult = await compiler.compile({
+          mainFilePath
+        });
+
+        console.log('Compilation Result:', compileResult);
+        const artifactData = compileResult.result;
+
+        if (artifactData && artifactData.length > 0) {
+          console.log('Artifact size:', artifactData.length);
+          setArtifact(artifactData);
+          setError(null);
+        } else {
+          console.warn('Artifact is empty!');
+          if (compileResult.diagnostics && compileResult.diagnostics.length > 0) {
+            // 详细打印每个诊断信息
+            compileResult.diagnostics.forEach((d, i) => {
+              console.error(`编译错误 #${i + 1}:`, d);
+            });
+            // 将第一个错误显示给用户
+            const firstError = compileResult.diagnostics[0];
+            const errorMsg = typeof firstError === 'string'
+              ? firstError
+              : (firstError.message || JSON.stringify(firstError));
+            setError(`编译错误: ${errorMsg}`);
+          }
+        }
+      } catch (err) {
+        console.error('Compile error:', err);
+        setError(err instanceof Error ? err.message : '编译错误');
+      }
+    };
+
+    // 防抖处理
+    const timer = setTimeout(compile, 300);
+    return () => clearTimeout(timer);
+  }, [compiler, code, data]);
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-full bg-slate-200 text-gray-500">
+        <Loader2 className="animate-spin mr-2" size={20} />
+        <span>加载 Typst 引擎...</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="w-full h-full flex flex-col bg-slate-200">
+      {/* 缩放工具栏 */}
+      <div className="flex-shrink-0 h-10 bg-slate-700 border-b border-slate-600 flex items-center justify-center gap-1 px-4">
+        <button
+          onClick={zoomOut}
+          className="p-1.5 rounded hover:bg-slate-600 text-slate-300 hover:text-white transition-colors"
+          title="缩小"
+        >
+          <ZoomOut size={16} />
+        </button>
+
+        <div className="px-3 py-1 bg-slate-800 rounded text-xs text-slate-300 min-w-[60px] text-center font-mono">
+          {Math.round(zoom * 100)}%
+        </div>
+
+        <button
+          onClick={zoomIn}
+          className="p-1.5 rounded hover:bg-slate-600 text-slate-300 hover:text-white transition-colors"
+          title="放大"
+        >
+          <ZoomIn size={16} />
+        </button>
+
+        <div className="w-px h-5 bg-slate-600 mx-2" />
+
+        <button
+          onClick={resetZoom}
+          className="p-1.5 rounded hover:bg-slate-600 text-slate-300 hover:text-white transition-colors"
+          title="重置为 100%"
+        >
+          <RotateCcw size={16} />
+        </button>
+
+        <button
+          onClick={fitToWidth}
+          className="p-1.5 rounded hover:bg-slate-600 text-slate-300 hover:text-white transition-colors"
+          title="适应宽度"
+        >
+          <Maximize2 size={16} />
+        </button>
+      </div>
+
+      {/* 预览区域 - 可滚动 */}
+      <div
+        ref={containerRef}
+        className="flex-1 overflow-auto p-8"
+        style={{
+          backgroundImage: `
+            radial-gradient(circle, rgba(0,0,0,0.05) 1px, transparent 1px)
+          `,
+          backgroundSize: '20px 20px'
+        }}
+      >
+        {/* 错误提示 */}
+        {error && (
+          <div className="fixed top-16 right-4 bg-red-100 text-red-600 p-3 rounded-lg shadow-lg text-xs flex items-center gap-2 z-50 border border-red-200">
+            <AlertCircle size={14} />
+            {error}
+          </div>
+        )}
+
+        {/* 文档容器 - 纸张效果 */}
+        {artifact && (
+          <div className="flex justify-center">
+            <div
+              ref={documentRef}
+              className="bg-white"
+              style={{
+                transform: `scale(${zoom})`,
+                transformOrigin: 'top center',
+                // 给文档一个基础宽度，80mm ≈ 302px (at 96 DPI)
+                minWidth: '302px',
+                // 使用 inline-block 让容器能根据内容自适应
+                display: 'inline-block',
+                // 纸张阴影效果
+                boxShadow: `
+                  0 4px 6px -1px rgba(0, 0, 0, 0.1),
+                  0 10px 15px -3px rgba(0, 0, 0, 0.1),
+                  0 20px 25px -5px rgba(0, 0, 0, 0.1),
+                  0 25px 50px -12px rgba(0, 0, 0, 0.25)
+                `
+              }}
+            >
+              <TypstDocument
+                fill="#ffffff"
+                artifact={artifact}
+              />
+            </div>
+          </div>
+        )}
+
+        {/* 无内容时的占位 */}
+        {!artifact && !error && (
+          <div className="flex items-center justify-center h-full text-slate-400">
+            <div className="text-center">
+              <Eye size={48} className="mx-auto mb-4 opacity-30" />
+              <p className="text-sm">等待编译...</p>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+// 默认 Typst 代码
+const DEFAULT_CODE = `
+// ==========================================
+// 1. 页面与字体设置 (80mm 热敏纸标准)
+// ==========================================
+#set page(width: 80mm, height: auto, margin: 5mm)
+// 优先使用中文字体，回退到 Arial
+#set text(font: ("Noto Sans SC", "Arial"), size: 10pt)
+
+// ==========================================
+// 2. 引入官方扩展包 (全能条码库)
+// ==========================================
+// 确保您已运行 npm run sync 下载了此包
+#import "@preview/tiaoma:0.3.0"
+
+// ==========================================
+// 3. 票据头部
+// ==========================================
+#align(center)[
+  #text(1.5em, weight: "bold")[DeepPrint 智慧餐饮]
+  #v(0.5em)
+  #text(0.9em)[-- 收银小票 --]
+]
+
+#v(0.5em)
+#line(length: 100%, stroke: (dash: "dashed", thickness: 1pt))
+
+// ==========================================
+// 4. 订单基础信息 (Grid 布局)
+// ==========================================
+// 直接使用注入的 data 变量
+#grid(
+  columns: (1fr, auto), // 左侧撑满，右侧自适应
+  row-gutter: 0.8em,    // 行间距
+  [订单编号], [#text(font: "IBM Plex Mono")[#data.order_id]],
+  [打印时间], [#data.time],
+)
+
+#v(0.5em)
+#line(length: 100%, stroke: (dash: "dashed"))
+
+// ==========================================
+// 5. 商品列表
+// ==========================================
+#grid(
+  columns: (1fr, auto),
+  row-gutter: 0.6em,
+  // 表头
+  text(weight: "bold")[商品名称], text(weight: "bold")[金额],
+  
+  // 遍历 JSON 中的 items 数组
+  ..data.items.map(item => (
+    item.name, 
+    // 假设价格是数字，这里格式化一下，或者直接输出字符串
+    "¥" + str(item.price)
+  )).flatten()
+)
+
+#v(0.5em)
+#line(length: 100%, stroke: (thickness: 1pt))
+
+// ==========================================
+// 6. 金额汇总
+// ==========================================
+#align(right)[
+  #grid(
+    columns: 2,
+    gutter: 1em,
+    [应收金额:], 
+    text(1.4em, weight: "bold")[¥#data.total]
+  )
+]
+
+#v(1em)
+
+// ==========================================
+// 7. 底部条码区 (使用 tiaoma 库)
+// ==========================================
+#align(center)[
+  // Code 128 条形码 (用于扫码枪回单)
+  #tiaoma.code128(data.order_id, height: 1.2cm)
+  #v(0.2em)
+  #text(0.7em, fill: gray)[凭小票至前台开具发票]
+  
+  #v(1em)
+  
+  // 二维码 (用于小程序/支付)
+  // tiaoma.qrcode 也支持 width 参数，自动缩放
+  #tiaoma.qrcode("https://deepprint.ai/order/" + data.order_id, width: 2.5cm)
+  
+  #v(0.5em)
+  #text(0.8em)[扫码加会员，首单立减]
+]
+
+// 页脚留白，防止打印机切纸切到内容
+#v(1cm)
+`;
+
+// 默认数据
+const DEFAULT_DATA = {
+  "order_id": "ORD-20268888",
+  "time": "2026-02-04 12:30",
+  "total": "128.00",
+  "items": [
+    {
+      "name": "拿铁咖啡",
+      "price": 28.00
+    },
+    {
+      "name": "海盐芝士蛋糕",
+      "price": 35.00
+    },
+    {
+      "name": "经典意式肉酱面",
+      "price": 45.00
+    },
+    {
+      "name": "鲜榨橙汁",
+      "price": 20.00
+    }
+  ]
+};
+
+export default function DeepPrintStudio() {
+  // Typst 代码和数据状态
+  const [code, setCode] = useState(DEFAULT_CODE);
+  const [data, setData] = useState(DEFAULT_DATA);
+  const [dataInput, setDataInput] = useState(JSON.stringify(DEFAULT_DATA, null, 2));
+  const [dataError, setDataError] = useState<string | null>(null);
+
+  // UI 状态
+  const [showChat, setShowChat] = useState(true);
+  const [activeTab, setActiveTab] = useState('code'); // 'code' | 'data'
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  // 主题
+  const { theme, resolvedTheme, cycleTheme } = useTheme();
+
+  // 获取主题图标
+  const ThemeIcon = theme === THEMES.SYSTEM ? Monitor : (theme === THEMES.LIGHT ? Sun : Moon);
+  const themeLabel = theme === THEMES.SYSTEM ? '跟随系统' : (theme === THEMES.LIGHT ? '浅色' : '深色');
+
+  // AI Chat
+  const { messages, input, setInput, handleSubmit, isLoading, error: chatError } = useChat({
+    api: '/api/generate',
+    onFinish: (message) => {
+      // AI 完成后，提取 Typst 代码
+      if (message.role === 'assistant' && message.content) {
+        // 移除可能的 markdown 代码块标记
+        let typstCode = message.content;
+        if (typstCode.includes('```typst')) {
+          typstCode = typstCode.split('```typst')[1].split('```')[0];
+        } else if (typstCode.includes('```')) {
+          typstCode = typstCode.split('```')[1].split('```')[0];
+        }
+        setCode(typstCode.trim());
+      }
+    }
+  });
+
+  // 自动滚动到最新消息
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages]);
+
+  // 处理数据 JSON 输入
+  const handleDataChange = useCallback((value: string) => {
+    setDataInput(value);
+    try {
+      const parsed = JSON.parse(value);
+      setData(parsed);
+      setDataError(null);
+    } catch (err) {
+      setDataError('JSON 格式错误');
+    }
+  }, []);
+
+  // Monaco 编辑器 ref
+  const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
+  const handleEditorMount: OnMount = useCallback((editor) => {
+    editorRef.current = editor;
+  }, []);
+
+
+  // 快捷插入：包裹选中文本
+  const wrapSelection = useCallback((prefix: string, suffix: string = prefix) => {
+    const editor = editorRef.current;
+    if (!editor) return;
+
+    const selection = editor.getSelection();
+    const model = editor.getModel();
+    if (!selection || !model) return;
+
+    const selectedText = model.getValueInRange(selection);
+    const newText = `${prefix}${selectedText}${suffix}`;
+
+    editor.executeEdits('toolbar', [{
+      range: selection,
+      text: newText,
+      forceMoveMarkers: true
+    }]);
+
+    // 如果未选中文本，将光标移动到中间
+    if (!selectedText) {
+      const position = editor.getPosition();
+      if (position) {
+        // forceMoveMarkers: true 会将光标放在插入文本的后面
+        // 需要往回移动 suffix 的长度
+        editor.setPosition({
+          lineNumber: position.lineNumber,
+          column: position.column - suffix.length
+        });
+      }
+    }
+
+    editor.focus();
+  }, []);
+
+  // 快捷插入：行首添加前缀
+  const prefixLine = useCallback((prefix: string) => {
+    const editor = editorRef.current;
+    if (!editor) return;
+
+    const position = editor.getPosition();
+    const model = editor.getModel();
+    if (!position || !model) return;
+
+    const lineContent = model.getLineContent(position.lineNumber);
+
+    // 检查是否已有前缀
+    if (lineContent.startsWith(prefix)) {
+      // 移除前缀
+      editor.executeEdits('toolbar', [{
+        range: { startLineNumber: position.lineNumber, startColumn: 1, endLineNumber: position.lineNumber, endColumn: prefix.length + 1 },
+        text: '',
+        forceMoveMarkers: true
+      }]);
+    } else {
+      // 添加前缀
+      editor.executeEdits('toolbar', [{
+        range: { startLineNumber: position.lineNumber, startColumn: 1, endLineNumber: position.lineNumber, endColumn: 1 },
+        text: prefix,
+        forceMoveMarkers: true
+      }]);
+    }
+    editor.focus();
+  }, []);
+
+  // 快捷插入：插入文本
+  // const insertText = useCallback((text: string) => {
+  //   const editor = editorRef.current;
+  //   if (!editor) return;
+
+  //   const selection = editor.getSelection();
+  //   if (!selection) return;
+
+  //   editor.executeEdits('toolbar', [{
+  //     range: selection,
+  //     text: text,
+  //     forceMoveMarkers: true
+  //   }]);
+  //   editor.focus();
+  // }, []);
+
+  return (
+    <div className="flex h-screen bg-white dark:bg-slate-900 text-slate-900 dark:text-white overflow-hidden transition-colors">
+      {/* 左侧：Chat Panel */}
+      {showChat && (
+        <div className="w-[360px] flex flex-col bg-slate-100 dark:bg-slate-800 border-r border-slate-200 dark:border-slate-700 flex-shrink-0">
+          {/* Header */}
+          <div className="h-14 border-b border-slate-200 dark:border-slate-700 flex items-center px-4 gap-3 bg-slate-50 dark:bg-slate-800/50">
+            <div className="p-2 rounded-lg bg-gradient-to-br from-indigo-500 to-purple-600 text-white">
+              <Sparkles size={18} />
+            </div>
+            <div>
+              <h1 className="font-semibold text-sm">DeepPrint Copilot</h1>
+              <p className="text-[10px] text-slate-500 dark:text-slate-400">Typst AI 排版助手</p>
+            </div>
+            <button
+              onClick={() => setShowChat(false)}
+              className="ml-auto p-1.5 rounded hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-500 dark:text-slate-400"
+            >
+              <PanelLeftClose size={18} />
+            </button>
+          </div>
+
+          {/* Messages */}
+          <div className="flex-1 overflow-y-auto p-4 space-y-4">
+            {messages.length === 0 && (
+              <div className="text-center text-slate-500 dark:text-slate-400 py-8">
+                <Bot size={48} className="mx-auto mb-4 opacity-30" />
+                <p className="text-sm">描述你想要的排版设计</p>
+                <p className="text-xs mt-1 opacity-60">例如: "生成一个餐厅小票模板"</p>
+              </div>
+            )}
+
+            {messages.map((msg) => (
+              <div
+                key={msg.id}
+                className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
+              >
+                <div className={`max-w-[85%] rounded-2xl px-4 py-3 ${msg.role === 'user'
+                  ? 'bg-indigo-600 text-white rounded-tr-sm'
+                  : 'bg-slate-200 dark:bg-slate-700 text-slate-800 dark:text-slate-100 rounded-tl-sm'
+                  }`}>
+                  {msg.role === 'assistant' ? (
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300">
+                        <FileCode size={14} />
+                        <span>Typst 代码已生成</span>
+                      </div>
+                      <pre className="text-xs bg-slate-300 dark:bg-slate-800 rounded p-2 overflow-x-auto max-h-48 overflow-y-auto">
+                        {msg.content.substring(0, 300)}
+                        {msg.content.length > 300 && '...'}
+                      </pre>
+                    </div>
+                  ) : (
+                    <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
+                  )}
+                </div>
+              </div>
+            ))}
+
+            {isLoading && (
+              <div className="flex justify-start">
+                <div className="bg-slate-200 dark:bg-slate-700 rounded-2xl rounded-tl-sm px-4 py-3 flex items-center gap-2">
+                  <Loader2 size={16} className="animate-spin text-indigo-500" />
+                  <span className="text-sm text-slate-600 dark:text-slate-300">生成中...</span>
+                </div>
+              </div>
+            )}
+
+            {chatError && (
+              <div className="flex justify-start">
+                <div className="bg-red-900/50 border border-red-700 rounded-2xl rounded-tl-sm px-4 py-3">
+                  <p className="text-sm text-red-300">错误: {chatError.message}</p>
+                </div>
+              </div>
+            )}
+
+            <div ref={messagesEndRef} />
+          </div>
+
+          {/* Input */}
+          <form onSubmit={handleSubmit} className="p-4 border-t border-slate-200 dark:border-slate-700">
+            <div className="relative">
+              <input
+                type="text"
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                placeholder="描述你的排版需求..."
+                className="w-full pl-4 pr-12 py-3 bg-slate-200 dark:bg-slate-700 rounded-xl text-sm placeholder-slate-400 outline-none focus:ring-2 focus:ring-indigo-500 transition-all"
+                disabled={isLoading}
+              />
+              <button
+                type="submit"
+                disabled={isLoading || !input.trim()}
+                className="absolute right-2 top-2 p-2 rounded-lg bg-indigo-600 text-white hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+              >
+                <Send size={16} />
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* 中间：编辑器区域 */}
+      <div className="flex-1 flex flex-col min-w-0 border-r border-slate-200 dark:border-slate-700">
+        {/* 编辑器工具栏 */}
+        <div className="h-12 bg-slate-100 dark:bg-slate-800 border-b border-slate-200 dark:border-slate-700 flex items-center px-4 gap-4">
+          {!showChat && (
+            <button
+              onClick={() => setShowChat(true)}
+              className="p-2 rounded hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-500 dark:text-slate-400"
+              title="展开 AI 对话"
+            >
+              <PanelLeft size={18} />
+            </button>
+          )}
+
+          {/* Code / Data Tab */}
+          <div className="flex gap-1 bg-slate-200 dark:bg-slate-700/50 p-1 rounded-lg">
+            <button
+              onClick={() => setActiveTab('code')}
+              className={`px-3 py-1 rounded-md text-xs font-medium flex items-center gap-1.5 transition-all ${activeTab === 'code'
+                ? 'bg-white dark:bg-slate-600 text-slate-900 dark:text-white shadow'
+                : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                }`}
+            >
+              <Code2 size={14} />
+              Code
+            </button>
+            <button
+              onClick={() => setActiveTab('data')}
+              className={`px-3 py-1 rounded-md text-xs font-medium flex items-center gap-1.5 transition-all ${activeTab === 'data'
+                ? 'bg-white dark:bg-slate-600 text-slate-900 dark:text-white shadow'
+                : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                }`}
+            >
+              <Database size={14} />
+              Data
+              {dataError && <span className="w-1.5 h-1.5 rounded-full bg-red-500" />}
+            </button>
+          </div>
+
+          {/* 快捷格式化按钮 - 仅在 Code 模式显示 */}
+          {activeTab === 'code' && (
+            <div className="flex items-center gap-0.5 border-l border-slate-300 dark:border-slate-600 pl-4">
+              <button
+                onClick={() => wrapSelection('*')}
+                className="p-1.5 rounded hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-500 dark:text-slate-400"
+                title="加粗 *text*"
+              >
+                <Bold size={16} />
+              </button>
+              <button
+                onClick={() => wrapSelection('_')}
+                className="p-1.5 rounded hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-500 dark:text-slate-400"
+                title="斜体 _text_"
+              >
+                <Italic size={16} />
+              </button>
+              <button
+                onClick={() => wrapSelection('#underline[', ']')}
+                className="p-1.5 rounded hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-500 dark:text-slate-400"
+                title="下划线 #underline[text]"
+              >
+                <Underline size={16} />
+              </button>
+
+              <div className="w-px h-5 bg-slate-300 dark:bg-slate-600 mx-1" />
+
+              <button
+                onClick={() => prefixLine('= ')}
+                className="p-1.5 rounded hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-500 dark:text-slate-400"
+                title="标题 = heading"
+              >
+                <Heading size={16} />
+              </button>
+              <button
+                onClick={() => prefixLine('- ')}
+                className="p-1.5 rounded hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-500 dark:text-slate-400"
+                title="无序列表 - item"
+              >
+                <List size={16} />
+              </button>
+              <button
+                onClick={() => prefixLine('+ ')}
+                className="p-1.5 rounded hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-500 dark:text-slate-400"
+                title="有序列表 + item"
+              >
+                <ListOrdered size={16} />
+              </button>
+
+              <div className="w-px h-5 bg-slate-300 dark:bg-slate-600 mx-1" />
+
+              <button
+                onClick={() => wrapSelection('$')}
+                className="p-1.5 rounded hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-500 dark:text-slate-400"
+                title="数学公式 $formula$"
+              >
+                <span className="text-sm font-serif">Σ</span>
+              </button>
+              <button
+                onClick={() => wrapSelection('```\n', '\n```')}
+                className="p-1.5 rounded hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-500 dark:text-slate-400"
+                title="代码块"
+              >
+                <Code size={16} />
+              </button>
+
+            </div>
+          )}
+
+          <div className="ml-auto flex items-center gap-3">
+            {/* 主题切换按钮 */}
+            <button
+              onClick={cycleTheme}
+              className="p-2 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-500 dark:text-slate-400 transition-colors"
+              title={themeLabel}
+            >
+              <ThemeIcon size={18} />
+            </button>
+            <span className="text-xs text-slate-400 dark:text-slate-500">
+              DeepPrint v2.0
+            </span>
+          </div>
+        </div>
+
+        {/* 编辑器内容区 */}
+        <div className="flex-1 overflow-hidden relative">
+          {/* Code Editor */}
+          {activeTab === 'code' && (
+            <Editor
+              height="100%"
+              defaultLanguage="markdown"
+              theme={resolvedTheme === 'dark' ? 'vs-dark' : 'light'}
+              value={code}
+              onChange={(value) => setCode(value || '')}
+              onMount={handleEditorMount}
+              options={{
+                fontSize: 14,
+                fontFamily: 'JetBrains Mono, Menlo, Monaco, monospace',
+                minimap: { enabled: false },
+                lineNumbers: 'on',
+                wordWrap: 'on',
+                padding: { top: 16 },
+                scrollBeyondLastLine: false,
+              }}
+            />
+          )}
+
+          {/* Data Editor */}
+          {activeTab === 'data' && (
+            <div className="absolute inset-0 flex flex-col">
+              <div className="p-3 bg-slate-50 dark:bg-slate-800/50 border-b border-slate-200 dark:border-slate-700">
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  JSON 数据将通过 <code className="bg-slate-200 dark:bg-slate-700 px-1 rounded">data</code> 变量注入到模板
+                </p>
+                {dataError && (
+                  <p className="text-xs text-red-500 dark:text-red-400 mt-1 flex items-center gap-1">
+                    <AlertCircle size={12} />
+                    {dataError}
+                  </p>
+                )}
+              </div>
+              <div className="flex-1">
+                <Editor
+                  height="100%"
+                  defaultLanguage="json"
+                  theme={resolvedTheme === 'dark' ? 'vs-dark' : 'light'}
+                  value={dataInput}
+                  onChange={(value) => handleDataChange(value || '')}
+                  options={{
+                    fontSize: 14,
+                    fontFamily: 'JetBrains Mono, Menlo, Monaco, monospace',
+                    minimap: { enabled: false },
+                    lineNumbers: 'on',
+                    wordWrap: 'on',
+                    padding: { top: 16 },
+                    scrollBeyondLastLine: false,
+                  }}
+                />
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Status Bar */}
+        <div className="h-7 bg-slate-100 dark:bg-slate-800 border-t border-slate-200 dark:border-slate-700 px-4 flex items-center justify-between text-[10px] text-slate-400 dark:text-slate-500">
+          <span>Typst WASM Engine</span>
+          <span>{code.length} chars</span>
+        </div>
+      </div>
+
+      {/* 右侧：实时预览 */}
+      <div className="flex-1 flex flex-col min-w-0 bg-slate-200 dark:bg-slate-300">
+        <TypstPreview code={code} data={data} />
+      </div>
+    </div>
+  );
+}
