@@ -1,18 +1,24 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { TypstDocument } from '@myriaddreamin/typst.react';
 import { type TypstCompiler, createTypstCompiler, preloadRemoteFonts, MemoryAccessModel, initOptions } from '@myriaddreamin/typst.ts';
-import { useChat } from 'ai/react';
+import { DefaultChatTransport } from 'ai';
 import Editor, { type OnMount } from '@monaco-editor/react';
 import * as monaco from 'monaco-editor';
 import {
-  Send, Bot, Code2, Eye, Database,
+  Code2, Eye, Database,
   PanelLeftClose, PanelLeft, Loader2,
-  FileCode, Sparkles, AlertCircle,
+  Sparkles, AlertCircle,
   ZoomIn, ZoomOut, RotateCcw, Maximize2,
   Sun, Moon, Monitor,
   Bold, Italic, Underline, Heading, List, ListOrdered, Code
 } from 'lucide-react';
 import { useTheme, THEMES } from './hooks/useTheme';
+
+// Assistant UI Integration
+import { Thread } from '@/components/assistant-ui/thread';
+import { useChatRuntime } from '@assistant-ui/react-ai-sdk';
+import { AssistantRuntimeProvider } from '@assistant-ui/react';
+import { TooltipProvider } from '@/components/ui/tooltip';
 
 // =============================================================================
 // 🌌 Typst Universe 插件预加载 (编译时静态分析)
@@ -615,6 +621,73 @@ const DEFAULT_DATA = {
   ]
 };
 
+// =============================================================================
+// 🤖 ChatPanel - AI 对话面板 (使用 assistant-ui)
+// =============================================================================
+interface ChatPanelProps {
+  onCodeExtracted: (code: string) => void;
+  onClose: () => void;
+}
+
+const ChatPanel = ({ onCodeExtracted, onClose }: ChatPanelProps) => {
+  // 从 AI 响应中提取 Typst 代码
+  const extractTypstCode = useCallback((content: string) => {
+    // 提取 ```typst ... ``` 代码块
+    const match = content.match(/```typst\n([\s\S]*?)```/);
+    if (match) {
+      onCodeExtracted(match[1].trim());
+    }
+  }, [onCodeExtracted]);
+
+  // 使用 useChatRuntime 连接到后端 API
+  const runtime = useChatRuntime({
+    transport: new DefaultChatTransport({ api: '/api/generate' }),
+    onFinish: ({ message }) => {
+      // AI 完成后，提取 Typst 代码
+      if (message.role === 'assistant') {
+        // 从 message.parts 提取文本内容
+        const textContent = message.parts
+          ?.filter((part): part is { type: 'text'; text: string } => part.type === 'text')
+          .map(part => part.text)
+          .join('') || '';
+        if (textContent) {
+          extractTypstCode(textContent);
+        }
+      }
+    },
+  });
+
+  return (
+    <div className="w-[360px] h-full flex flex-col bg-slate-100 dark:bg-slate-800 border-r border-slate-200 dark:border-slate-700 flex-shrink-0">
+      {/* Header */}
+      <div className="h-14 flex-shrink-0 border-b border-slate-200 dark:border-slate-700 flex items-center px-4 gap-3 bg-slate-50 dark:bg-slate-800/50">
+        <div className="p-2 rounded-lg bg-gradient-to-br from-indigo-500 to-purple-600 text-white">
+          <Sparkles size={18} />
+        </div>
+        <div>
+          <h1 className="font-semibold text-sm">DeepPrint Copilot</h1>
+          <p className="text-[10px] text-slate-500 dark:text-slate-400">Typst AI 排版助手</p>
+        </div>
+        <button
+          onClick={onClose}
+          className="ml-auto p-1.5 rounded hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-500 dark:text-slate-400"
+        >
+          <PanelLeftClose size={18} />
+        </button>
+      </div>
+
+      {/* Thread (assistant-ui) - 使用 flex-1 和 min-h-0 确保正确的高度分配 */}
+      <div className="flex-1 min-h-0">
+        <TooltipProvider>
+          <AssistantRuntimeProvider runtime={runtime}>
+            <Thread />
+          </AssistantRuntimeProvider>
+        </TooltipProvider>
+      </div>
+    </div>
+  );
+};
+
 export default function DeepPrintStudio() {
   // Typst 代码和数据状态
   const [code, setCode] = useState(DEFAULT_CODE);
@@ -625,7 +698,6 @@ export default function DeepPrintStudio() {
   // UI 状态
   const [showChat, setShowChat] = useState(true);
   const [activeTab, setActiveTab] = useState('code'); // 'code' | 'data'
-  const messagesEndRef = useRef<HTMLDivElement>(null);
 
   // 主题
   const { theme, resolvedTheme, cycleTheme } = useTheme();
@@ -634,28 +706,10 @@ export default function DeepPrintStudio() {
   const ThemeIcon = theme === THEMES.SYSTEM ? Monitor : (theme === THEMES.LIGHT ? Sun : Moon);
   const themeLabel = theme === THEMES.SYSTEM ? '跟随系统' : (theme === THEMES.LIGHT ? '浅色' : '深色');
 
-  // AI Chat
-  const { messages, input, setInput, handleSubmit, isLoading, error: chatError } = useChat({
-    api: '/api/generate',
-    onFinish: (message) => {
-      // AI 完成后，提取 Typst 代码
-      if (message.role === 'assistant' && message.content) {
-        // 移除可能的 markdown 代码块标记
-        let typstCode = message.content;
-        if (typstCode.includes('```typst')) {
-          typstCode = typstCode.split('```typst')[1].split('```')[0];
-        } else if (typstCode.includes('```')) {
-          typstCode = typstCode.split('```')[1].split('```')[0];
-        }
-        setCode(typstCode.trim());
-      }
-    }
-  });
-
-  // 自动滚动到最新消息
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+  // AI 代码回调 - 从 ChatPanel 接收提取的代码
+  const handleCodeExtracted = useCallback((extractedCode: string) => {
+    setCode(extractedCode);
+  }, []);
 
   // 处理数据 JSON 输入
   const handleDataChange = useCallback((value: string) => {
@@ -758,105 +812,13 @@ export default function DeepPrintStudio() {
 
   return (
     <div className="flex h-screen bg-white dark:bg-slate-900 text-slate-900 dark:text-white overflow-hidden transition-colors">
-      {/* 左侧：Chat Panel */}
-      {showChat && (
-        <div className="w-[360px] flex flex-col bg-slate-100 dark:bg-slate-800 border-r border-slate-200 dark:border-slate-700 flex-shrink-0">
-          {/* Header */}
-          <div className="h-14 border-b border-slate-200 dark:border-slate-700 flex items-center px-4 gap-3 bg-slate-50 dark:bg-slate-800/50">
-            <div className="p-2 rounded-lg bg-gradient-to-br from-indigo-500 to-purple-600 text-white">
-              <Sparkles size={18} />
-            </div>
-            <div>
-              <h1 className="font-semibold text-sm">DeepPrint Copilot</h1>
-              <p className="text-[10px] text-slate-500 dark:text-slate-400">Typst AI 排版助手</p>
-            </div>
-            <button
-              onClick={() => setShowChat(false)}
-              className="ml-auto p-1.5 rounded hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-500 dark:text-slate-400"
-            >
-              <PanelLeftClose size={18} />
-            </button>
-          </div>
-
-          {/* Messages */}
-          <div className="flex-1 overflow-y-auto p-4 space-y-4">
-            {messages.length === 0 && (
-              <div className="text-center text-slate-500 dark:text-slate-400 py-8">
-                <Bot size={48} className="mx-auto mb-4 opacity-30" />
-                <p className="text-sm">描述你想要的排版设计</p>
-                <p className="text-xs mt-1 opacity-60">例如: "生成一个餐厅小票模板"</p>
-              </div>
-            )}
-
-            {messages.map((msg) => (
-              <div
-                key={msg.id}
-                className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
-              >
-                <div className={`max-w-[85%] rounded-2xl px-4 py-3 ${msg.role === 'user'
-                  ? 'bg-indigo-600 text-white rounded-tr-sm'
-                  : 'bg-slate-200 dark:bg-slate-700 text-slate-800 dark:text-slate-100 rounded-tl-sm'
-                  }`}>
-                  {msg.role === 'assistant' ? (
-                    <div className="space-y-2">
-                      <div className="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300">
-                        <FileCode size={14} />
-                        <span>Typst 代码已生成</span>
-                      </div>
-                      <pre className="text-xs bg-slate-300 dark:bg-slate-800 rounded p-2 overflow-x-auto max-h-48 overflow-y-auto">
-                        {msg.content.substring(0, 300)}
-                        {msg.content.length > 300 && '...'}
-                      </pre>
-                    </div>
-                  ) : (
-                    <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
-                  )}
-                </div>
-              </div>
-            ))}
-
-            {isLoading && (
-              <div className="flex justify-start">
-                <div className="bg-slate-200 dark:bg-slate-700 rounded-2xl rounded-tl-sm px-4 py-3 flex items-center gap-2">
-                  <Loader2 size={16} className="animate-spin text-indigo-500" />
-                  <span className="text-sm text-slate-600 dark:text-slate-300">生成中...</span>
-                </div>
-              </div>
-            )}
-
-            {chatError && (
-              <div className="flex justify-start">
-                <div className="bg-red-900/50 border border-red-700 rounded-2xl rounded-tl-sm px-4 py-3">
-                  <p className="text-sm text-red-300">错误: {chatError.message}</p>
-                </div>
-              </div>
-            )}
-
-            <div ref={messagesEndRef} />
-          </div>
-
-          {/* Input */}
-          <form onSubmit={handleSubmit} className="p-4 border-t border-slate-200 dark:border-slate-700">
-            <div className="relative">
-              <input
-                type="text"
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                placeholder="描述你的排版需求..."
-                className="w-full pl-4 pr-12 py-3 bg-slate-200 dark:bg-slate-700 rounded-xl text-sm placeholder-slate-400 outline-none focus:ring-2 focus:ring-indigo-500 transition-all"
-                disabled={isLoading}
-              />
-              <button
-                type="submit"
-                disabled={isLoading || !input.trim()}
-                className="absolute right-2 top-2 p-2 rounded-lg bg-indigo-600 text-white hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
-              >
-                <Send size={16} />
-              </button>
-            </div>
-          </form>
-        </div>
-      )}
+      {/* 左侧：Chat Panel (assistant-ui Thread) - 使用 CSS 隐藏以保留对话历史 */}
+      <div className={showChat ? '' : 'hidden'}>
+        <ChatPanel
+          onCodeExtracted={handleCodeExtracted}
+          onClose={() => setShowChat(false)}
+        />
+      </div>
 
       {/* 中间：编辑器区域 */}
       <div className="flex-1 flex flex-col min-w-0 border-r border-slate-200 dark:border-slate-700">

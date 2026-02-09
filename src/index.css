@@ -11,6 +11,7 @@
  * 当 html 元素有 .dark 类时启用深色模式
  */
 @variant dark (&:where(.dark, .dark *));
+
 /* 
  ---break---
  */
@@ -54,6 +55,7 @@
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-ring: var(--sidebar-ring);
 }
+
 /* 
  ---break---
  */
@@ -91,6 +93,7 @@
   --sidebar-border: oklch(0.929 0.013 255.508);
   --sidebar-ring: oklch(0.704 0.04 256.788);
 }
+
 /* 
  ---break---
  */
@@ -127,6 +130,7 @@
   --sidebar-border: oklch(1 0 0 / 10%);
   --sidebar-ring: oklch(0.551 0.027 264.364);
 }
+
 /* 
  ---break---
  */
@@ -134,6 +138,7 @@
   * {
     @apply border-border outline-ring/50;
   }
+
   body {
     @apply bg-background text-foreground;
   }
