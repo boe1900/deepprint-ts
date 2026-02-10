@@ -182,6 +182,63 @@ app.post('/folders', requireAuth, async (c) => {
   return c.json({ id, name: name.trim(), sort_order: 0 }, 201)
 })
 
+// PUT /folders/:id — 更新分组
+app.put('/folders/:id', requireAuth, async (c) => {
+  const userId = (c.get('session') as any).user.id
+  const folderId = c.req.param('id')
+  const body = await c.req.json<{ name?: string }>()
+  const db = c.env.deepprint_auth
+
+  const existing = await db
+    .prepare('SELECT id FROM folders WHERE id = ? AND user_id = ?')
+    .bind(folderId, userId)
+    .first()
+
+  if (!existing) return c.json({ error: '分组不存在' }, 404)
+
+  if (!body.name || !body.name.trim()) {
+    return c.json({ error: '分组名称不能为空' }, 400)
+  }
+
+  await db
+    .prepare('UPDATE folders SET name = ? WHERE id = ? AND user_id = ?')
+    .bind(body.name.trim(), folderId, userId)
+    .run()
+
+  return c.json({ success: true })
+})
+
+// DELETE /folders/:id — 删除分组（若有模版则禁止）
+app.delete('/folders/:id', requireAuth, async (c) => {
+  const userId = (c.get('session') as any).user.id
+  const folderId = c.req.param('id')
+  const db = c.env.deepprint_auth
+
+  const existing = await db
+    .prepare('SELECT id FROM folders WHERE id = ? AND user_id = ?')
+    .bind(folderId, userId)
+    .first()
+
+  if (!existing) return c.json({ error: '分组不存在' }, 404)
+
+  const countResult = await db
+    .prepare('SELECT COUNT(1) as cnt FROM templates WHERE folder_id = ? AND user_id = ?')
+    .bind(folderId, userId)
+    .first()
+
+  const count = (countResult?.cnt as number) || 0
+  if (count > 0) {
+    return c.json({ error: '分组下存在模版，无法删除' }, 400)
+  }
+
+  await db
+    .prepare('DELETE FROM folders WHERE id = ? AND user_id = ?')
+    .bind(folderId, userId)
+    .run()
+
+  return c.json({ success: true })
+})
+
 // POST /templates — 在指定分组下创建新模版
 app.post('/templates', requireAuth, async (c) => {
   const userId = (c.get('session') as any).user.id
@@ -264,6 +321,27 @@ app.put('/templates/:id', requireAuth, async (c) => {
   await db
     .prepare(`UPDATE templates SET ${sets.join(', ')} WHERE id = ? AND user_id = ?`)
     .bind(...values)
+    .run()
+
+  return c.json({ success: true })
+})
+
+// DELETE /templates/:id — 删除模版
+app.delete('/templates/:id', requireAuth, async (c) => {
+  const userId = (c.get('session') as any).user.id
+  const templateId = c.req.param('id')
+  const db = c.env.deepprint_auth
+
+  const existing = await db
+    .prepare('SELECT id FROM templates WHERE id = ? AND user_id = ?')
+    .bind(templateId, userId)
+    .first()
+
+  if (!existing) return c.json({ error: '模版不存在' }, 404)
+
+  await db
+    .prepare('DELETE FROM templates WHERE id = ? AND user_id = ?')
+    .bind(templateId, userId)
     .run()
 
   return c.json({ success: true })

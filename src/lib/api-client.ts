@@ -72,6 +72,21 @@ export const api = {
         })
     },
 
+    /** 更新分组 */
+    async updateFolder(id: string, data: Partial<{ name: string }>): Promise<void> {
+        await request<{ success: boolean }>(`/api/folders/${id}`, {
+            method: 'PUT',
+            body: JSON.stringify(data),
+        })
+    },
+
+    /** 删除分组 */
+    async deleteFolder(id: string): Promise<void> {
+        await request<{ success: boolean }>(`/api/folders/${id}`, {
+            method: 'DELETE',
+        })
+    },
+
     /** 在指定分组下创建新模版 */
     async createTemplate(folderId: string, name: string): Promise<Template> {
         return request<Template>('/api/templates', {
@@ -93,6 +108,13 @@ export const api = {
         await request<{ success: boolean }>(`/api/templates/${id}`, {
             method: 'PUT',
             body: JSON.stringify(data),
+        })
+    },
+
+    /** 删除模版 */
+    async deleteTemplate(id: string): Promise<void> {
+        await request<{ success: boolean }>(`/api/templates/${id}`, {
+            method: 'DELETE',
         })
     },
 }

@@ -18,6 +18,7 @@ interface InputDialogProps {
     placeholder?: string
     defaultValue?: string
     confirmLabel?: string
+    loadingLabel?: string
     isLoading?: boolean
     onConfirm: (value: string) => void
 }
@@ -30,6 +31,7 @@ export function InputDialog({
     placeholder = '请输入名称...',
     defaultValue = '',
     confirmLabel = '创建',
+    loadingLabel,
     isLoading = false,
     onConfirm,
 }: InputDialogProps) {
@@ -98,7 +100,7 @@ export function InputDialog({
                             {isLoading ? (
                                 <>
                                     <Loader2 className="h-4 w-4 animate-spin" />
-                                    创建中...
+                                    {loadingLabel ?? `${confirmLabel}中...`}
                                 </>
                             ) : (
                                 confirmLabel

@@ -29,6 +29,7 @@ import { LoginDialog } from '@/components/auth/login-dialog';
 import TemplateTree from '@/components/TemplateTree';
 import DataEditorDialog from '@/components/DataEditorDialog';
 import { InputDialog } from '@/components/InputDialog';
+import { ConfirmDialog } from '@/components/ConfirmDialog';
 
 // =============================================================================
 // 🌌 Typst Universe 插件预加载 (编译时静态分析)
@@ -704,6 +705,20 @@ export default function DeepPrintStudio() {
   const [createTargetFolderId, setCreateTargetFolderId] = useState('');
   const [isCreating, setIsCreating] = useState(false);
 
+  // 重命名弹窗状态
+  const [showRenameDialog, setShowRenameDialog] = useState(false);
+  const [renameDialogMode, setRenameDialogMode] = useState<'folder' | 'template'>('folder');
+  const [renameTargetId, setRenameTargetId] = useState('');
+  const [renameDefaultValue, setRenameDefaultValue] = useState('');
+  const [isRenaming, setIsRenaming] = useState(false);
+  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+  const [deleteDialogMode, setDeleteDialogMode] = useState<'folder' | 'template'>('folder');
+  const [deleteTargetId, setDeleteTargetId] = useState('');
+  const [deleteTargetName, setDeleteTargetName] = useState('');
+  const [deleteBlocked, setDeleteBlocked] = useState(false);
+  const [deleteBlockedMessage, setDeleteBlockedMessage] = useState('');
+  const [isDeleting, setIsDeleting] = useState(false);
+
   // TypstPreview ref for zoom controls
   const previewRef = useRef<TypstPreviewRef>(null);
 
@@ -800,6 +815,94 @@ export default function DeepPrintStudio() {
     }
   }, [createDialogMode, createTargetFolderId, loadFolders, handleSelectTemplate]);
 
+  const handleRenameFolder = useCallback((id: string, name: string) => {
+    setRenameDialogMode('folder');
+    setRenameTargetId(id);
+    setRenameDefaultValue(name);
+    setShowRenameDialog(true);
+  }, []);
+
+  const handleRenameTemplate = useCallback((id: string, name: string) => {
+    setRenameDialogMode('template');
+    setRenameTargetId(id);
+    setRenameDefaultValue(name);
+    setShowRenameDialog(true);
+  }, []);
+
+  const handleRenameConfirm = useCallback(async (name: string) => {
+    setIsRenaming(true);
+    try {
+      if (renameDialogMode === 'folder') {
+        await api.updateFolder(renameTargetId, { name });
+      } else {
+        await api.updateTemplate(renameTargetId, { name });
+      }
+      await loadFolders();
+      setShowRenameDialog(false);
+    } catch (err) {
+      console.error(`重命名${renameDialogMode === 'folder' ? '分组' : '模版'}失败:`, err);
+      alert(err instanceof Error ? err.message : '操作失败');
+    } finally {
+      setIsRenaming(false);
+    }
+  }, [renameDialogMode, renameTargetId, loadFolders]);
+
+  const handleDeleteFolder = useCallback((id: string) => {
+    const target = folders.find(f => f.id === id);
+    if (target && target.templates.length > 0) {
+      setDeleteDialogMode('folder');
+      setDeleteTargetId(id);
+      setDeleteTargetName(target.name);
+      setDeleteBlocked(true);
+      setDeleteBlockedMessage('该分组下存在模版，无法删除。请先移动或删除分组内的模版。');
+      setShowDeleteDialog(true);
+      return;
+    }
+    setDeleteDialogMode('folder');
+    setDeleteTargetId(id);
+    setDeleteTargetName(target?.name ?? '');
+    setDeleteBlocked(false);
+    setDeleteBlockedMessage('');
+    setShowDeleteDialog(true);
+  }, [folders]);
+
+  const handleDeleteTemplate = useCallback((id: string) => {
+    const target = folders.flatMap(f => f.templates).find(t => t.id === id);
+    setDeleteDialogMode('template');
+    setDeleteTargetId(id);
+    setDeleteTargetName(target?.name ?? '');
+    setDeleteBlocked(false);
+    setDeleteBlockedMessage('');
+    setShowDeleteDialog(true);
+  }, [folders]);
+
+  const handleDeleteConfirm = useCallback(async () => {
+    if (deleteBlocked) {
+      setShowDeleteDialog(false);
+      return;
+    }
+    setIsDeleting(true);
+    try {
+      if (deleteDialogMode === 'folder') {
+        await api.deleteFolder(deleteTargetId);
+      } else {
+        await api.deleteTemplate(deleteTargetId);
+        if (activeTemplateId === deleteTargetId) {
+          setActiveTemplateId('');
+          setCode(DEFAULT_CODE);
+          setData(DEFAULT_DATA);
+        }
+      }
+      await loadFolders();
+      setShowDeleteDialog(false);
+    } catch (err) {
+      console.error(`删除${deleteDialogMode === 'folder' ? '分组' : '模版'}失败:`, err);
+      alert(err instanceof Error ? err.message : '删除失败');
+    } finally {
+      setIsDeleting(false);
+    }
+  }, [activeTemplateId, deleteBlocked, deleteDialogMode, deleteTargetId, loadFolders]);
+
   // 主题
   const { theme, resolvedTheme, cycleTheme } = useTheme();
   const ThemeIcon = theme === THEMES.SYSTEM ? Monitor : (theme === THEMES.LIGHT ? Sun : Moon);
@@ -868,6 +971,10 @@ export default function DeepPrintStudio() {
         onSelectTemplate={handleSelectTemplate}
         onCreateFolder={handleCreateFolder}
         onCreateTemplate={handleCreateTemplate}
+        onRenameFolder={handleRenameFolder}
+        onDeleteFolder={handleDeleteFolder}
+        onRenameTemplate={handleRenameTemplate}
+        onDeleteTemplate={handleDeleteTemplate}
         user={session?.user}
         onLogin={() => setShowLoginDialog(true)}
         onCycleTheme={cycleTheme}
@@ -1068,6 +1175,35 @@ export default function DeepPrintStudio() {
         confirmLabel={createDialogMode === 'folder' ? '新建分组' : '新建模版'}
         isLoading={isCreating}
         onConfirm={handleCreateConfirm}
+      />
+
+      <InputDialog
+        open={showRenameDialog}
+        onOpenChange={setShowRenameDialog}
+        title={renameDialogMode === 'folder' ? '重命名业务分组' : '重命名模版'}
+        description={renameDialogMode === 'folder' ? '修改分组名称' : '修改模版名称'}
+        placeholder={renameDialogMode === 'folder' ? '例如：餐饮业务' : '例如：收银小票'}
+        defaultValue={renameDefaultValue}
+        confirmLabel="重命名"
+        isLoading={isRenaming}
+        onConfirm={handleRenameConfirm}
+      />
+
+      <ConfirmDialog
+        open={showDeleteDialog}
+        onOpenChange={setShowDeleteDialog}
+        title={deleteDialogMode === 'folder' ? '删除业务分组' : '删除模版'}
+        description={deleteBlocked
+          ? deleteBlockedMessage
+          : (deleteDialogMode === 'folder'
+            ? `确定要删除分组“${deleteTargetName || '未命名分组'}”吗？此操作不可恢复。`
+            : `确定要删除模版“${deleteTargetName || '未命名模版'}”吗？此操作不可恢复。`)}
+        confirmLabel={deleteBlocked ? '知道了' : '删除'}
+        cancelLabel="取消"
+        showCancel={!deleteBlocked}
+        variant={deleteBlocked ? 'default' : 'danger'}
+        isLoading={isDeleting}
+        onConfirm={handleDeleteConfirm}
       />
     </div>
   );

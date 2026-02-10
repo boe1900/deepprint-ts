@@ -2,7 +2,8 @@ import { useState, useMemo } from 'react';
 import type { LucideIcon } from 'lucide-react';
 import {
     ChevronRight, ChevronDown, Folder, FileText,
-    Plus, Search, Settings, Printer, LogIn, Loader2
+    Plus, Search, Settings, Printer, LogIn, Loader2,
+    Pencil, Trash2
 } from 'lucide-react';
 import { UserMenu } from '@/components/auth/user-menu';
 import type { FolderWithTemplates } from '@/lib/api-client';
@@ -16,6 +17,10 @@ interface TemplateTreeProps {
     onSelectTemplate: (id: string) => void;
     onCreateFolder: () => void;
     onCreateTemplate: (folderId: string) => void;
+    onRenameFolder: (id: string, name: string) => void;
+    onDeleteFolder: (id: string) => void;
+    onRenameTemplate: (id: string, name: string) => void;
+    onDeleteTemplate: (id: string) => void;
     user?: { id?: string | null; name?: string | null; email?: string | null; image?: string | null; createdAt?: string | Date | null } | null;
     onLogin?: () => void;
     onCycleTheme?: () => void;
@@ -28,6 +33,7 @@ interface TemplateTreeProps {
 export default function TemplateTree({
     groups, isLoading, activeTemplateId, onSelectTemplate,
     onCreateFolder, onCreateTemplate,
+    onRenameFolder, onDeleteFolder, onRenameTemplate, onDeleteTemplate,
     user, onLogin, onCycleTheme, themeLabel, ThemeIcon,
 }: TemplateTreeProps) {
     const [openFolders, setOpenFolders] = useState<Set<string>>(new Set());
@@ -129,13 +135,29 @@ export default function TemplateTree({
                                     <Folder size={14} className="text-slate-400 dark:text-slate-500" />
                                     <span>{group.name}</span>
                                 </div>
-                                <button
-                                    onClick={(e) => handleCreateTemplate(e, group.id)}
-                                    className="opacity-0 group-hover:opacity-100 p-1 hover:bg-blue-100 dark:hover:bg-blue-900/40 text-slate-400 hover:text-blue-600 dark:hover:text-blue-400 rounded transition-all"
-                                    title="在此分组新建模版"
-                                >
-                                    <Plus size={12} />
-                                </button>
+                                <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-all">
+                                    <button
+                                        onClick={(e) => { e.stopPropagation(); onRenameFolder(group.id, group.name); }}
+                                        className="p-1 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 rounded transition-all"
+                                        title="重命名分组"
+                                    >
+                                        <Pencil size={12} />
+                                    </button>
+                                    <button
+                                        onClick={(e) => { e.stopPropagation(); onDeleteFolder(group.id); }}
+                                        className="p-1 hover:bg-red-100 dark:hover:bg-red-900/30 text-slate-400 hover:text-red-600 dark:hover:text-red-400 rounded transition-all"
+                                        title="删除分组"
+                                    >
+                                        <Trash2 size={12} />
+                                    </button>
+                                    <button
+                                        onClick={(e) => handleCreateTemplate(e, group.id)}
+                                        className="p-1 hover:bg-blue-100 dark:hover:bg-blue-900/40 text-slate-400 hover:text-blue-600 dark:hover:text-blue-400 rounded transition-all"
+                                        title="在此分组新建模版"
+                                    >
+                                        <Plus size={12} />
+                                    </button>
+                                </div>
                             </div>
 
                             {group.isOpen && (
@@ -162,6 +184,22 @@ export default function TemplateTree({
                                             {template.status === 'draft' && (
                                                 <div className="w-1.5 h-1.5 bg-orange-400 rounded-full shrink-0" title="草稿" />
                                             )}
+                                            <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-all">
+                                                <button
+                                                    onClick={(e) => { e.stopPropagation(); onRenameTemplate(template.id, template.name); }}
+                                                    className="p-1 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 rounded transition-all"
+                                                    title="重命名模版"
+                                                >
+                                                    <Pencil size={12} />
+                                                </button>
+                                                <button
+                                                    onClick={(e) => { e.stopPropagation(); onDeleteTemplate(template.id); }}
+                                                    className="p-1 hover:bg-red-100 dark:hover:bg-red-900/30 text-slate-400 hover:text-red-600 dark:hover:text-red-400 rounded transition-all"
+                                                    title="删除模版"
+                                                >
+                                                    <Trash2 size={12} />
+                                                </button>
+                                            </div>
                                         </div>
                                     ))}
 
