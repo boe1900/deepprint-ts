@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, forwardRef, useImperativeHandle } from 'react';
 import { TypstDocument } from '@myriaddreamin/typst.react';
 import { type TypstCompiler, createTypstCompiler, preloadRemoteFonts, MemoryAccessModel, initOptions } from '@myriaddreamin/typst.ts';
 import { DefaultChatTransport } from 'ai';
@@ -6,7 +6,7 @@ import Editor, { type OnMount } from '@monaco-editor/react';
 import * as monaco from 'monaco-editor';
 import {
   Code2, Eye, Database,
-  PanelLeftClose, PanelLeft, Loader2,
+  PanelRightClose, PanelRight, Loader2,
   Sparkles, AlertCircle,
   ZoomIn, ZoomOut, RotateCcw, Maximize2,
   Sun, Moon, Monitor,
@@ -23,7 +23,10 @@ import { TooltipProvider } from '@/components/ui/tooltip';
 // Auth
 import { authClient } from '@/lib/auth-client';
 import { LoginDialog } from '@/components/auth/login-dialog';
-import { UserMenu } from '@/components/auth/user-menu';
+
+// New layout components
+import TemplateTree from '@/components/TemplateTree';
+import DataEditorDialog from '@/components/DataEditorDialog';
 
 // =============================================================================
 // 🌌 Typst Universe 插件预加载 (编译时静态分析)
@@ -216,7 +219,15 @@ TypstDocument.setWasmModuleInitOptions({
 });
 
 // Typst WASM 渲染器组件 - PDF 阅读器风格预览
-const TypstPreview = ({ code, data }: { code: string; data: any }) => {
+export interface TypstPreviewRef {
+  zoom: number;
+  zoomIn: () => void;
+  zoomOut: () => void;
+  resetZoom: () => void;
+  fitToWidth: () => void;
+}
+
+const TypstPreview = forwardRef<TypstPreviewRef, { code: string; data: any }>(({ code, data }, ref) => {
   const [compiler, setCompiler] = useState<TypstCompiler | null>(null);
   const [artifact, setArtifact] = useState<Uint8Array | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -253,6 +264,14 @@ const TypstPreview = ({ code, data }: { code: string; data: any }) => {
       setZoom(Math.max(newZoom, 0.25));
     }
   }, [zoom]);
+
+  useImperativeHandle(ref, () => ({
+    zoom,
+    zoomIn,
+    zoomOut,
+    resetZoom,
+    fitToWidth,
+  }), [zoom, zoomIn, zoomOut, resetZoom, fitToWidth]);
 
   // 初始化编译器
   useEffect(() => {
@@ -390,7 +409,7 @@ const TypstPreview = ({ code, data }: { code: string; data: any }) => {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-full bg-slate-200 text-gray-500">
+      <div className="flex items-center justify-center h-full bg-slate-200 dark:bg-slate-800 text-gray-500 dark:text-gray-400">
         <Loader2 className="animate-spin mr-2" size={20} />
         <span>加载 Typst 引擎...</span>
       </div>
@@ -398,48 +417,7 @@ const TypstPreview = ({ code, data }: { code: string; data: any }) => {
   }
 
   return (
-    <div className="w-full h-full flex flex-col bg-slate-200">
-      {/* 缩放工具栏 */}
-      <div className="flex-shrink-0 h-10 bg-slate-700 border-b border-slate-600 flex items-center justify-center gap-1 px-4">
-        <button
-          onClick={zoomOut}
-          className="p-1.5 rounded hover:bg-slate-600 text-slate-300 hover:text-white transition-colors"
-          title="缩小"
-        >
-          <ZoomOut size={16} />
-        </button>
-
-        <div className="px-3 py-1 bg-slate-800 rounded text-xs text-slate-300 min-w-[60px] text-center font-mono">
-          {Math.round(zoom * 100)}%
-        </div>
-
-        <button
-          onClick={zoomIn}
-          className="p-1.5 rounded hover:bg-slate-600 text-slate-300 hover:text-white transition-colors"
-          title="放大"
-        >
-          <ZoomIn size={16} />
-        </button>
-
-        <div className="w-px h-5 bg-slate-600 mx-2" />
-
-        <button
-          onClick={resetZoom}
-          className="p-1.5 rounded hover:bg-slate-600 text-slate-300 hover:text-white transition-colors"
-          title="重置为 100%"
-        >
-          <RotateCcw size={16} />
-        </button>
-
-        <button
-          onClick={fitToWidth}
-          className="p-1.5 rounded hover:bg-slate-600 text-slate-300 hover:text-white transition-colors"
-          title="适应宽度"
-        >
-          <Maximize2 size={16} />
-        </button>
-      </div>
-
+    <div className="w-full h-full flex flex-col bg-slate-200 dark:bg-slate-800">
       {/* 预览区域 - 可滚动 */}
       <div
         ref={containerRef}
@@ -501,7 +479,7 @@ const TypstPreview = ({ code, data }: { code: string; data: any }) => {
       </div>
     </div>
   );
-};
+});
 
 // 默认 Typst 代码
 const DEFAULT_CODE = `
@@ -663,25 +641,25 @@ const ChatPanel = ({ onCodeExtracted, onClose }: ChatPanelProps) => {
   });
 
   return (
-    <div className="w-[360px] h-full flex flex-col bg-slate-100 dark:bg-slate-800 border-r border-slate-200 dark:border-slate-700 flex-shrink-0">
+    <div className="w-[360px] h-full flex flex-col bg-white dark:bg-slate-900 border-l border-slate-200 dark:border-slate-700/60 flex-shrink-0">
       {/* Header */}
-      <div className="h-14 flex-shrink-0 border-b border-slate-200 dark:border-slate-700 flex items-center px-4 gap-3 bg-slate-50 dark:bg-slate-800/50">
-        <div className="p-2 rounded-lg bg-gradient-to-br from-indigo-500 to-purple-600 text-white">
+      <div className="h-14 flex-shrink-0 border-b border-slate-100 dark:border-slate-700/60 flex items-center px-4 gap-3">
+        <div className="w-9 h-9 bg-gradient-to-br from-indigo-500 to-blue-600 rounded-xl flex items-center justify-center text-white shadow-lg shadow-blue-200 dark:shadow-blue-900/30">
           <Sparkles size={18} />
         </div>
         <div>
-          <h1 className="font-semibold text-sm">DeepPrint Copilot</h1>
-          <p className="text-[10px] text-slate-500 dark:text-slate-400">Typst AI 排版助手</p>
+          <h1 className="font-bold text-sm text-slate-900 dark:text-white">DeepPrint AI</h1>
+          <p className="text-[10px] text-slate-400 dark:text-slate-500 font-medium">设计助手在线</p>
         </div>
         <button
           onClick={onClose}
-          className="ml-auto p-1.5 rounded hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-500 dark:text-slate-400"
+          className="ml-auto p-1.5 rounded hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-400 dark:text-slate-500"
         >
-          <PanelLeftClose size={18} />
+          <PanelRightClose size={18} />
         </button>
       </div>
 
-      {/* Thread (assistant-ui) - 使用 flex-1 和 min-h-0 确保正确的高度分配 */}
+      {/* Thread (assistant-ui) */}
       <div className="flex-1 min-h-0">
         <TooltipProvider>
           <AssistantRuntimeProvider runtime={runtime}>
@@ -696,16 +674,19 @@ const ChatPanel = ({ onCodeExtracted, onClose }: ChatPanelProps) => {
 export default function DeepPrintStudio() {
   // Typst 代码和数据状态
   const [code, setCode] = useState(DEFAULT_CODE);
-  const [data, setData] = useState(DEFAULT_DATA);
-  const [dataInput, setDataInput] = useState(JSON.stringify(DEFAULT_DATA, null, 2));
-  const [dataError, setDataError] = useState<string | null>(null);
+  const [data, setData] = useState<Record<string, unknown>>(DEFAULT_DATA);
 
   // UI 状态
   const [showChat, setShowChat] = useState(true);
-  const [activeTab, setActiveTab] = useState('code'); // 'code' | 'data'
+  const [activeTab, setActiveTab] = useState<'preview' | 'code'>('preview');
+  const [showDataModal, setShowDataModal] = useState(false);
   const [showLoginDialog, setShowLoginDialog] = useState(false);
+  const [activeTemplateId, setActiveTemplateId] = useState('t_receipt');
 
-  // Auth - fetch session on mount
+  // TypstPreview ref for zoom controls
+  const previewRef = useRef<TypstPreviewRef>(null);
+
+  // Auth
   const [session, setSession] = useState<{ user: { id?: string | null; name?: string | null; email?: string | null; image?: string | null; createdAt?: string | Date | null } } | null>(null);
   useEffect(() => {
     authClient.getSession().then(({ data }) => {
@@ -717,26 +698,12 @@ export default function DeepPrintStudio() {
 
   // 主题
   const { theme, resolvedTheme, cycleTheme } = useTheme();
-
-  // 获取主题图标
   const ThemeIcon = theme === THEMES.SYSTEM ? Monitor : (theme === THEMES.LIGHT ? Sun : Moon);
   const themeLabel = theme === THEMES.SYSTEM ? '跟随系统' : (theme === THEMES.LIGHT ? '浅色' : '深色');
 
-  // AI 代码回调 - 从 ChatPanel 接收提取的代码
+  // AI 代码回调
   const handleCodeExtracted = useCallback((extractedCode: string) => {
     setCode(extractedCode);
-  }, []);
-
-  // 处理数据 JSON 输入
-  const handleDataChange = useCallback((value: string) => {
-    setDataInput(value);
-    try {
-      const parsed = JSON.parse(value);
-      setData(parsed);
-      setDataError(null);
-    } catch (err) {
-      setDataError('JSON 格式错误');
-    }
   }, []);
 
   // Monaco 编辑器 ref
@@ -745,38 +712,22 @@ export default function DeepPrintStudio() {
     editorRef.current = editor;
   }, []);
 
-
   // 快捷插入：包裹选中文本
   const wrapSelection = useCallback((prefix: string, suffix: string = prefix) => {
     const editor = editorRef.current;
     if (!editor) return;
-
     const selection = editor.getSelection();
     const model = editor.getModel();
     if (!selection || !model) return;
-
     const selectedText = model.getValueInRange(selection);
     const newText = `${prefix}${selectedText}${suffix}`;
-
-    editor.executeEdits('toolbar', [{
-      range: selection,
-      text: newText,
-      forceMoveMarkers: true
-    }]);
-
-    // 如果未选中文本，将光标移动到中间
+    editor.executeEdits('toolbar', [{ range: selection, text: newText, forceMoveMarkers: true }]);
     if (!selectedText) {
       const position = editor.getPosition();
       if (position) {
-        // forceMoveMarkers: true 会将光标放在插入文本的后面
-        // 需要往回移动 suffix 的长度
-        editor.setPosition({
-          lineNumber: position.lineNumber,
-          column: position.column - suffix.length
-        });
+        editor.setPosition({ lineNumber: position.lineNumber, column: position.column - suffix.length });
       }
     }
-
     editor.focus();
   }, []);
 
@@ -784,197 +735,156 @@ export default function DeepPrintStudio() {
   const prefixLine = useCallback((prefix: string) => {
     const editor = editorRef.current;
     if (!editor) return;
-
     const position = editor.getPosition();
     const model = editor.getModel();
     if (!position || !model) return;
-
     const lineContent = model.getLineContent(position.lineNumber);
-
-    // 检查是否已有前缀
     if (lineContent.startsWith(prefix)) {
-      // 移除前缀
       editor.executeEdits('toolbar', [{
         range: { startLineNumber: position.lineNumber, startColumn: 1, endLineNumber: position.lineNumber, endColumn: prefix.length + 1 },
-        text: '',
-        forceMoveMarkers: true
+        text: '', forceMoveMarkers: true
       }]);
     } else {
-      // 添加前缀
       editor.executeEdits('toolbar', [{
         range: { startLineNumber: position.lineNumber, startColumn: 1, endLineNumber: position.lineNumber, endColumn: 1 },
-        text: prefix,
-        forceMoveMarkers: true
+        text: prefix, forceMoveMarkers: true
       }]);
     }
     editor.focus();
   }, []);
 
-  // 快捷插入：插入文本
-  // const insertText = useCallback((text: string) => {
-  //   const editor = editorRef.current;
-  //   if (!editor) return;
-
-  //   const selection = editor.getSelection();
-  //   if (!selection) return;
-
-  //   editor.executeEdits('toolbar', [{
-  //     range: selection,
-  //     text: text,
-  //     forceMoveMarkers: true
-  //   }]);
-  //   editor.focus();
-  // }, []);
-
   return (
     <div className="flex h-screen bg-white dark:bg-slate-900 text-slate-900 dark:text-white overflow-hidden transition-colors">
-      {/* 左侧：Chat Panel (assistant-ui Thread) - 使用 CSS 隐藏以保留对话历史 */}
-      <div className={showChat ? '' : 'hidden'}>
-        <ChatPanel
-          onCodeExtracted={handleCodeExtracted}
-          onClose={() => setShowChat(false)}
-        />
-      </div>
 
-      {/* 中间：编辑器区域 */}
-      <div className="flex-1 flex flex-col min-w-0 border-r border-slate-200 dark:border-slate-700">
-        {/* 编辑器工具栏 */}
-        <div className="h-12 bg-slate-100 dark:bg-slate-800 border-b border-slate-200 dark:border-slate-700 flex items-center px-4 gap-4">
-          {!showChat && (
-            <button
-              onClick={() => setShowChat(true)}
-              className="p-2 rounded hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-500 dark:text-slate-400"
-              title="展开 AI 对话"
-            >
-              <PanelLeft size={18} />
-            </button>
-          )}
+      {/* ─── 左侧栏：模版资源管理器 ─── */}
+      <TemplateTree
+        activeTemplateId={activeTemplateId}
+        onSelectTemplate={setActiveTemplateId}
+        user={session?.user}
+        onLogin={() => setShowLoginDialog(true)}
+        onCycleTheme={cycleTheme}
+        themeLabel={themeLabel}
+        ThemeIcon={ThemeIcon}
+      />
 
-          {/* Code / Data Tab */}
-          <div className="flex gap-1 bg-slate-200 dark:bg-slate-700/50 p-1 rounded-lg">
-            <button
-              onClick={() => setActiveTab('code')}
-              className={`px-3 py-1 rounded-md text-xs font-medium flex items-center gap-1.5 transition-all ${activeTab === 'code'
-                ? 'bg-white dark:bg-slate-600 text-slate-900 dark:text-white shadow'
-                : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
-                }`}
-            >
-              <Code2 size={14} />
-              Code
-            </button>
-            <button
-              onClick={() => setActiveTab('data')}
-              className={`px-3 py-1 rounded-md text-xs font-medium flex items-center gap-1.5 transition-all ${activeTab === 'data'
-                ? 'bg-white dark:bg-slate-600 text-slate-900 dark:text-white shadow'
-                : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
-                }`}
-            >
-              <Database size={14} />
-              Data
-              {dataError && <span className="w-1.5 h-1.5 rounded-full bg-red-500" />}
-            </button>
-          </div>
+      {/* ─── 中间栏：预览 + 代码 ─── */}
+      <main className="flex-1 flex flex-col min-w-0 bg-slate-100 dark:bg-slate-800/30 relative overflow-hidden">
 
-          {/* 快捷格式化按钮 - 仅在 Code 模式显示 */}
-          {activeTab === 'code' && (
-            <div className="flex items-center gap-0.5 border-l border-slate-300 dark:border-slate-600 pl-4">
+        {/* 工具栏 */}
+        <div className="h-14 bg-white/90 dark:bg-slate-900/90 backdrop-blur-md border-b border-slate-200 dark:border-slate-700/60 flex items-center justify-between px-5 z-10 shadow-sm shrink-0">
+          {/* 左侧信息 */}
+          <div className="flex items-center gap-4">
+            {/* Tab 切换：预览 / 代码 */}
+            <div className="flex gap-1 bg-slate-100 dark:bg-slate-800 p-1 rounded-lg">
               <button
-                onClick={() => wrapSelection('*')}
-                className="p-1.5 rounded hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-500 dark:text-slate-400"
-                title="加粗 *text*"
+                onClick={() => setActiveTab('preview')}
+                className={`px-3 py-1.5 rounded-md text-xs font-medium flex items-center gap-1.5 transition-all ${activeTab === 'preview'
+                  ? 'bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-sm'
+                  : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                  }`}
               >
-                <Bold size={16} />
+                <Eye size={14} /> 预览
               </button>
               <button
-                onClick={() => wrapSelection('_')}
-                className="p-1.5 rounded hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-500 dark:text-slate-400"
-                title="斜体 _text_"
+                onClick={() => setActiveTab('code')}
+                className={`px-3 py-1.5 rounded-md text-xs font-medium flex items-center gap-1.5 transition-all ${activeTab === 'code'
+                  ? 'bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-sm'
+                  : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                  }`}
               >
-                <Italic size={16} />
+                <Code2 size={14} /> 代码
               </button>
-              <button
-                onClick={() => wrapSelection('#underline[', ']')}
-                className="p-1.5 rounded hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-500 dark:text-slate-400"
-                title="下划线 #underline[text]"
-              >
-                <Underline size={16} />
-              </button>
-
-              <div className="w-px h-5 bg-slate-300 dark:bg-slate-600 mx-1" />
-
-              <button
-                onClick={() => prefixLine('= ')}
-                className="p-1.5 rounded hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-500 dark:text-slate-400"
-                title="标题 = heading"
-              >
-                <Heading size={16} />
-              </button>
-              <button
-                onClick={() => prefixLine('- ')}
-                className="p-1.5 rounded hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-500 dark:text-slate-400"
-                title="无序列表 - item"
-              >
-                <List size={16} />
-              </button>
-              <button
-                onClick={() => prefixLine('+ ')}
-                className="p-1.5 rounded hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-500 dark:text-slate-400"
-                title="有序列表 + item"
-              >
-                <ListOrdered size={16} />
-              </button>
-
-              <div className="w-px h-5 bg-slate-300 dark:bg-slate-600 mx-1" />
-
-              <button
-                onClick={() => wrapSelection('$')}
-                className="p-1.5 rounded hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-500 dark:text-slate-400"
-                title="数学公式 $formula$"
-              >
-                <span className="text-sm font-serif">Σ</span>
-              </button>
-              <button
-                onClick={() => wrapSelection('```\n', '\n```')}
-                className="p-1.5 rounded hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-500 dark:text-slate-400"
-                title="代码块"
-              >
-                <Code size={16} />
-              </button>
-
             </div>
-          )}
 
-          <div className="ml-auto flex items-center gap-3">
-            {/* 主题切换按钮 */}
-            <button
-              onClick={cycleTheme}
-              className="p-2 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-500 dark:text-slate-400 transition-colors"
-              title={themeLabel}
-            >
-              <ThemeIcon size={18} />
-            </button>
+            <div className="h-5 w-px bg-slate-200 dark:bg-slate-700" />
 
-            {/* 登录/用户菜单 */}
-            {session?.user ? (
-              <UserMenu user={session.user} />
-            ) : (
-              <button
-                onClick={() => setShowLoginDialog(true)}
-                className="px-3 py-1.5 text-xs font-medium rounded-lg bg-slate-900 dark:bg-white text-white dark:text-slate-900 hover:bg-slate-800 dark:hover:bg-slate-100 transition-colors"
-              >
-                登录
-              </button>
+            {/* 缩放控制 - 仅在预览模式显示 */}
+            {activeTab === 'preview' && (
+              <div className="flex items-center gap-1">
+                <button onClick={() => previewRef.current?.zoomOut()} className="p-1.5 rounded hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-500 dark:text-slate-400" title="缩小">
+                  <ZoomOut size={15} />
+                </button>
+                <div className="px-2 py-0.5 bg-slate-100 dark:bg-slate-800 rounded text-[11px] text-slate-500 dark:text-slate-400 min-w-[48px] text-center font-mono tabular-nums">
+                  {Math.round((previewRef.current?.zoom ?? 1) * 100)}%
+                </div>
+                <button onClick={() => previewRef.current?.zoomIn()} className="p-1.5 rounded hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-500 dark:text-slate-400" title="放大">
+                  <ZoomIn size={15} />
+                </button>
+                <div className="w-px h-4 bg-slate-300 dark:bg-slate-600 mx-0.5" />
+                <button onClick={() => previewRef.current?.resetZoom()} className="p-1.5 rounded hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-500 dark:text-slate-400" title="重置 100%">
+                  <RotateCcw size={14} />
+                </button>
+                <button onClick={() => previewRef.current?.fitToWidth()} className="p-1.5 rounded hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-500 dark:text-slate-400" title="适应宽度">
+                  <Maximize2 size={14} />
+                </button>
+              </div>
             )}
 
-            <span className="text-xs text-slate-400 dark:text-slate-500">
-              DeepPrint v2.0
-            </span>
+            {/* 快捷格式化按钮 - 仅在 Code 模式显示 */}
+            {activeTab === 'code' && (
+              <div className="flex items-center gap-0.5">
+                <button onClick={() => wrapSelection('*')} className="p-1.5 rounded hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-500 dark:text-slate-400" title="加粗">
+                  <Bold size={15} />
+                </button>
+                <button onClick={() => wrapSelection('_')} className="p-1.5 rounded hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-500 dark:text-slate-400" title="斜体">
+                  <Italic size={15} />
+                </button>
+                <button onClick={() => wrapSelection('#underline[', ']')} className="p-1.5 rounded hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-500 dark:text-slate-400" title="下划线">
+                  <Underline size={15} />
+                </button>
+                <div className="w-px h-4 bg-slate-300 dark:bg-slate-600 mx-1" />
+                <button onClick={() => prefixLine('= ')} className="p-1.5 rounded hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-500 dark:text-slate-400" title="标题">
+                  <Heading size={15} />
+                </button>
+                <button onClick={() => prefixLine('- ')} className="p-1.5 rounded hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-500 dark:text-slate-400" title="列表">
+                  <List size={15} />
+                </button>
+                <button onClick={() => prefixLine('+ ')} className="p-1.5 rounded hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-500 dark:text-slate-400" title="有序列表">
+                  <ListOrdered size={15} />
+                </button>
+                <div className="w-px h-4 bg-slate-300 dark:bg-slate-600 mx-1" />
+                <button onClick={() => wrapSelection('$')} className="p-1.5 rounded hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-500 dark:text-slate-400" title="公式">
+                  <span className="text-sm font-serif">Σ</span>
+                </button>
+                <button onClick={() => wrapSelection('```\n', '\n```')} className="p-1.5 rounded hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-500 dark:text-slate-400" title="代码块">
+                  <Code size={15} />
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* 右侧操作 */}
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => setShowDataModal(true)}
+              className="flex items-center gap-2 px-3 py-1.5 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 text-xs font-bold rounded-lg border border-slate-200 dark:border-slate-700 shadow-sm transition-all"
+            >
+              <Database size={14} className="text-green-600 dark:text-green-400" /> 模拟数据
+            </button>
+
+            {/* 展开/折叠 AI 面板 */}
+            {!showChat && (
+              <button
+                onClick={() => setShowChat(true)}
+                className="p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-500 dark:text-slate-400 transition-colors"
+                title="展开 AI 对话"
+              >
+                <PanelRight size={18} />
+              </button>
+            )}
           </div>
         </div>
 
-        {/* 编辑器内容区 */}
+        {/* 内容区 */}
         <div className="flex-1 overflow-hidden relative">
-          {/* Code Editor */}
+          {/* 预览 Tab */}
+          {activeTab === 'preview' && (
+            <div className="w-full h-full bg-slate-200 dark:bg-slate-800">
+              <TypstPreview ref={previewRef} code={code} data={data} />
+            </div>
+          )}
+
+          {/* 代码 Tab */}
           {activeTab === 'code' && (
             <Editor
               height="100%"
@@ -994,54 +904,31 @@ export default function DeepPrintStudio() {
               }}
             />
           )}
-
-          {/* Data Editor */}
-          {activeTab === 'data' && (
-            <div className="absolute inset-0 flex flex-col">
-              <div className="p-3 bg-slate-50 dark:bg-slate-800/50 border-b border-slate-200 dark:border-slate-700">
-                <p className="text-xs text-slate-500 dark:text-slate-400">
-                  JSON 数据将通过 <code className="bg-slate-200 dark:bg-slate-700 px-1 rounded">data</code> 变量注入到模板
-                </p>
-                {dataError && (
-                  <p className="text-xs text-red-500 dark:text-red-400 mt-1 flex items-center gap-1">
-                    <AlertCircle size={12} />
-                    {dataError}
-                  </p>
-                )}
-              </div>
-              <div className="flex-1">
-                <Editor
-                  height="100%"
-                  defaultLanguage="json"
-                  theme={resolvedTheme === 'dark' ? 'vs-dark' : 'light'}
-                  value={dataInput}
-                  onChange={(value) => handleDataChange(value || '')}
-                  options={{
-                    fontSize: 14,
-                    fontFamily: 'JetBrains Mono, Menlo, Monaco, monospace',
-                    minimap: { enabled: false },
-                    lineNumbers: 'on',
-                    wordWrap: 'on',
-                    padding: { top: 16 },
-                    scrollBeyondLastLine: false,
-                  }}
-                />
-              </div>
-            </div>
-          )}
         </div>
 
         {/* Status Bar */}
-        <div className="h-7 bg-slate-100 dark:bg-slate-800 border-t border-slate-200 dark:border-slate-700 px-4 flex items-center justify-between text-[10px] text-slate-400 dark:text-slate-500">
-          <span>Typst WASM Engine</span>
+        <div className="h-7 bg-white dark:bg-slate-900 border-t border-slate-200 dark:border-slate-700/60 px-4 flex items-center justify-between text-[10px] text-slate-400 dark:text-slate-500 shrink-0">
+          <span>Typst WASM Engine v0.6</span>
           <span>{code.length} chars</span>
         </div>
+      </main>
+
+      {/* ─── 右侧栏：AI 对话 ─── */}
+      <div className={showChat ? '' : 'hidden'}>
+        <ChatPanel
+          onCodeExtracted={handleCodeExtracted}
+          onClose={() => setShowChat(false)}
+        />
       </div>
 
-      {/* Right: Live Preview */}
-      <div className="flex-1 flex flex-col min-w-0 bg-slate-200 dark:bg-slate-300">
-        <TypstPreview code={code} data={data} />
-      </div>
+      {/* 模拟数据弹窗 */}
+      <DataEditorDialog
+        open={showDataModal}
+        onOpenChange={setShowDataModal}
+        data={data}
+        onSave={setData}
+        resolvedTheme={resolvedTheme}
+      />
 
       {/* 登录对话框 */}
       <LoginDialog open={showLoginDialog} onOpenChange={setShowLoginDialog} />

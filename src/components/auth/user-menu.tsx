@@ -11,9 +11,10 @@ interface UserMenuProps {
         image?: string | null
         createdAt?: string | Date | null
     }
+    popupDirection?: 'up' | 'down'
 }
 
-export function UserMenu({ user }: UserMenuProps) {
+export function UserMenu({ user, popupDirection = 'down' }: UserMenuProps) {
     const [open, setOpen] = useState(false)
     const [showProfile, setShowProfile] = useState(false)
     const menuRef = useRef<HTMLDivElement>(null)
@@ -63,7 +64,7 @@ export function UserMenu({ user }: UserMenuProps) {
             </button>
 
             {open && !showProfile && (
-                <div className="absolute right-0 top-full mt-2 w-56 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 shadow-lg z-50 py-1 animate-in fade-in-0 zoom-in-95">
+                <div className={`absolute z-50 w-56 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 shadow-lg py-1 animate-in fade-in-0 zoom-in-95 ${popupDirection === 'up' ? 'left-0 bottom-full mb-2' : 'right-0 top-full mt-2'}`}>
                     {/* 用户信息 */}
                     <div className="px-3 py-2.5 border-b border-slate-100 dark:border-slate-700">
                         <div className="flex items-center gap-2.5">
@@ -102,7 +103,7 @@ export function UserMenu({ user }: UserMenuProps) {
 
             {/* 账户信息面板 */}
             {open && showProfile && (
-                <div className="absolute right-0 top-full mt-2 w-72 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 shadow-lg z-50 animate-in fade-in-0 zoom-in-95">
+                <div className={`absolute z-50 w-72 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 shadow-lg animate-in fade-in-0 zoom-in-95 ${popupDirection === 'up' ? 'left-0 bottom-full mb-2' : 'right-0 top-full mt-2'}`}>
                     {/* 头部 */}
                     <div className="flex items-center gap-2 px-3 py-2.5 border-b border-slate-100 dark:border-slate-700">
                         <button
