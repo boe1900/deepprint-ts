@@ -11,7 +11,7 @@ import {
   Sparkles, AlertCircle,
   ZoomIn, ZoomOut, RotateCcw, Maximize2,
   Sun, Moon, Monitor,
-  Bold, Italic, Underline, Heading, List, ListOrdered, Code
+  Bold, Italic, Underline, Heading, List, ListOrdered, Code, Download
 } from 'lucide-react';
 import { useTheme, THEMES } from './hooks/useTheme';
 
@@ -228,6 +228,7 @@ export interface TypstPreviewRef {
   zoomOut: () => void;
   resetZoom: () => void;
   fitToWidth: () => void;
+  exportPdf: () => Promise<Uint8Array | null>;
 }
 
 const TypstPreview = forwardRef<
@@ -271,13 +272,46 @@ const TypstPreview = forwardRef<
     }
   }, [zoom]);
 
+  const buildFullCode = useCallback(() => {
+    // 使用 Typst 内置的 json.decode 解析 JSON 字符串，比手动拼接字符串更健壮
+    const dataCode = `#let data = json.decode("${JSON.stringify(data).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}")\n`;
+    return dataCode + code;
+  }, [code, data]);
+
+  const exportPdf = useCallback(async (): Promise<Uint8Array | null> => {
+    if (!compiler || !code) return null;
+    try {
+      const mainFilePath = '/main.typ';
+      const fullCode = buildFullCode();
+      compiler.addSource(mainFilePath, fullCode);
+      const compileResult = await compiler.compile({ mainFilePath, format: 'pdf' });
+      const pdfData = compileResult.result;
+      if (!pdfData || pdfData.length === 0) {
+        if (compileResult.diagnostics && compileResult.diagnostics.length > 0) {
+          const firstError = compileResult.diagnostics[0];
+          const errorMsg = typeof firstError === 'string'
+            ? firstError
+            : (firstError.message || JSON.stringify(firstError));
+          setError(`编译错误: ${errorMsg}`);
+        }
+        return null;
+      }
+      setError(null);
+      return pdfData;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '导出失败');
+      return null;
+    }
+  }, [buildFullCode, code, compiler]);
+
   useImperativeHandle(ref, () => ({
     zoom,
     zoomIn,
     zoomOut,
     resetZoom,
     fitToWidth,
-  }), [zoom, zoomIn, zoomOut, resetZoom, fitToWidth]);
+    exportPdf,
+  }), [zoom, zoomIn, zoomOut, resetZoom, fitToWidth, exportPdf]);
 
   useEffect(() => {
     onZoomChange?.(zoom);
@@ -372,10 +406,7 @@ const TypstPreview = forwardRef<
 
     const compile = async () => {
       try {
-        // 构建完整代码 - 使用 JSON 数据注入
-        // 使用 Typst 内置的 json.decode 解析 JSON 字符串，比手动拼接字符串更健壮
-        const dataCode = `#let data = json.decode("${JSON.stringify(data).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}")\n`;
-        const fullCode = dataCode + code;
+        const fullCode = buildFullCode();
 
         // 编译
         const mainFilePath = '/main.typ';
@@ -415,7 +446,7 @@ const TypstPreview = forwardRef<
     // 防抖处理
     const timer = setTimeout(compile, 300);
     return () => clearTimeout(timer);
-  }, [compiler, code, data]);
+  }, [compiler, code, buildFullCode]);
 
   if (loading) {
     return (
@@ -718,6 +749,7 @@ export default function DeepPrintStudio() {
   const [deleteBlocked, setDeleteBlocked] = useState(false);
   const [deleteBlockedMessage, setDeleteBlockedMessage] = useState('');
   const [isDeleting, setIsDeleting] = useState(false);
+  const [isExportingPdf, setIsExportingPdf] = useState(false);
 
   // TypstPreview ref for zoom controls
   const previewRef = useRef<TypstPreviewRef>(null);
@@ -903,6 +935,39 @@ export default function DeepPrintStudio() {
     }
   }, [activeTemplateId, deleteBlocked, deleteDialogMode, deleteTargetId, loadFolders]);
 
+  const sanitizeFilename = useCallback((name: string) => {
+    return name.replace(/[\\/:*?"<>|]/g, '_');
+  }, []);
+
+  const handleExportPdf = useCallback(async () => {
+    if (!previewRef.current) return;
+    setIsExportingPdf(true);
+    try {
+      const pdfBytes = await previewRef.current.exportPdf();
+      if (!pdfBytes || pdfBytes.length === 0) {
+        alert('导出失败，请检查模板是否有编译错误');
+        return;
+      }
+      const activeTemplate = folders.flatMap(f => f.templates).find(t => t.id === activeTemplateId);
+      const baseName = sanitizeFilename(activeTemplate?.name || 'typst-export');
+      const safeBytes = new Uint8Array(pdfBytes);
+      const blob = new Blob([safeBytes.buffer], { type: 'application/pdf' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${baseName}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('导出 PDF 失败:', err);
+      alert('导出失败，请稍后再试');
+    } finally {
+      setIsExportingPdf(false);
+    }
+  }, [activeTemplateId, folders, sanitizeFilename]);
+
   // 主题
   const { theme, resolvedTheme, cycleTheme } = useTheme();
   const ThemeIcon = theme === THEMES.SYSTEM ? Monitor : (theme === THEMES.LIGHT ? Sun : Moon);
@@ -1086,6 +1151,16 @@ export default function DeepPrintStudio() {
               className="flex items-center gap-2 px-3 py-1.5 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 text-xs font-bold rounded-lg border border-slate-200 dark:border-slate-700 shadow-sm transition-all"
             >
               <Database size={14} className="text-green-600 dark:text-green-400" /> 模拟数据
+            </button>
+
+            <button
+              onClick={handleExportPdf}
+              disabled={isExportingPdf || activeTab !== 'preview'}
+              className="flex items-center gap-2 px-3 py-1.5 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 disabled:opacity-50 text-slate-600 dark:text-slate-300 text-xs font-bold rounded-lg border border-slate-200 dark:border-slate-700 shadow-sm transition-all"
+              title={activeTab !== 'preview' ? '切换到预览后可导出' : '导出 PDF'}
+            >
+              {isExportingPdf ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} className="text-slate-500 dark:text-slate-400" />}
+              {isExportingPdf ? '导出中...' : '导出 PDF'}
             </button>
 
             {/* 展开/折叠 AI 面板 */}
