@@ -229,7 +229,10 @@ export interface TypstPreviewRef {
   fitToWidth: () => void;
 }
 
-const TypstPreview = forwardRef<TypstPreviewRef, { code: string; data: any }>(({ code, data }, ref) => {
+const TypstPreview = forwardRef<
+  TypstPreviewRef,
+  { code: string; data: any; onZoomChange?: (zoom: number) => void }
+>(({ code, data, onZoomChange }, ref) => {
   const [compiler, setCompiler] = useState<TypstCompiler | null>(null);
   const [artifact, setArtifact] = useState<Uint8Array | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -274,6 +277,10 @@ const TypstPreview = forwardRef<TypstPreviewRef, { code: string; data: any }>(({
     resetZoom,
     fitToWidth,
   }), [zoom, zoomIn, zoomOut, resetZoom, fitToWidth]);
+
+  useEffect(() => {
+    onZoomChange?.(zoom);
+  }, [onZoomChange, zoom]);
 
   // 初始化编译器
   useEffect(() => {
@@ -681,6 +688,7 @@ export default function DeepPrintStudio() {
   // UI 状态
   const [showChat, setShowChat] = useState(true);
   const [activeTab, setActiveTab] = useState<'preview' | 'code'>('preview');
+  const [previewZoom, setPreviewZoom] = useState(1);
   const [showDataModal, setShowDataModal] = useState(false);
   const [showLoginDialog, setShowLoginDialog] = useState(false);
   const [activeTemplateId, setActiveTemplateId] = useState('');
@@ -905,7 +913,7 @@ export default function DeepPrintStudio() {
                   <ZoomOut size={15} />
                 </button>
                 <div className="px-2 py-0.5 bg-slate-100 dark:bg-slate-800 rounded text-[11px] text-slate-500 dark:text-slate-400 min-w-[48px] text-center font-mono tabular-nums">
-                  {Math.round((previewRef.current?.zoom ?? 1) * 100)}%
+                  {Math.round(previewZoom * 100)}%
                 </div>
                 <button onClick={() => previewRef.current?.zoomIn()} className="p-1.5 rounded hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-500 dark:text-slate-400" title="放大">
                   <ZoomIn size={15} />
@@ -991,7 +999,12 @@ export default function DeepPrintStudio() {
           {/* 预览 Tab */}
           {activeTab === 'preview' && (
             <div className="w-full h-full bg-slate-200 dark:bg-slate-800">
-              <TypstPreview ref={previewRef} code={code} data={data} />
+              <TypstPreview
+                ref={previewRef}
+                code={code}
+                data={data}
+                onZoomChange={setPreviewZoom}
+              />
             </div>
           )}
 
