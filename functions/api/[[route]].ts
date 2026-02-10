@@ -4,6 +4,7 @@ import { createMiddleware } from 'hono/factory'
 import { streamText } from 'ai'
 import { createGoogleGenerativeAI } from '@ai-sdk/google'
 import { createAuth } from '../lib/auth'
+import { D1Database } from '@cloudflare/workers-types'
 
 type Bindings = {
   deepprint_auth: D1Database
@@ -127,6 +128,145 @@ app.post('/generate', requireAuth, async (c) => {
       500
     )
   }
+})
+
+// ─── Folders & Templates CRUD ────────────────────────────────────────────────
+
+// GET /folders — 获取当前用户所有分组及模版列表
+app.get('/folders', requireAuth, async (c) => {
+  const userId = (c.get('session') as any).user.id
+  const db = c.env.deepprint_auth
+
+  const folders = await db
+    .prepare('SELECT id, name, sort_order, created_at FROM folders WHERE user_id = ? ORDER BY sort_order ASC, created_at ASC')
+    .bind(userId)
+    .all()
+
+  const templates = await db
+    .prepare('SELECT id, folder_id, name, status, updated_at FROM templates WHERE user_id = ? ORDER BY updated_at DESC')
+    .bind(userId)
+    .all()
+
+  // 按 folder_id 分组
+  const templatesByFolder: Record<string, any[]> = {}
+  for (const t of templates.results) {
+    const fid = t.folder_id as string
+    if (!templatesByFolder[fid]) templatesByFolder[fid] = []
+    templatesByFolder[fid].push(t)
+  }
+
+  const result = folders.results.map((f: any) => ({
+    ...f,
+    templates: templatesByFolder[f.id] || [],
+  }))
+
+  return c.json({ folders: result })
+})
+
+// POST /folders — 创建新分组
+app.post('/folders', requireAuth, async (c) => {
+  const userId = (c.get('session') as any).user.id
+  const { name } = await c.req.json<{ name: string }>()
+  if (!name || !name.trim()) {
+    return c.json({ error: '分组名称不能为空' }, 400)
+  }
+
+  const id = crypto.randomUUID()
+  const db = c.env.deepprint_auth
+
+  await db
+    .prepare('INSERT INTO folders (id, user_id, name) VALUES (?, ?, ?)')
+    .bind(id, userId, name.trim())
+    .run()
+
+  return c.json({ id, name: name.trim(), sort_order: 0 }, 201)
+})
+
+// POST /templates — 在指定分组下创建新模版
+app.post('/templates', requireAuth, async (c) => {
+  const userId = (c.get('session') as any).user.id
+  const { folder_id, name } = await c.req.json<{ folder_id: string; name: string }>()
+
+  if (!folder_id) return c.json({ error: 'folder_id 不能为空' }, 400)
+  if (!name || !name.trim()) return c.json({ error: '模版名称不能为空' }, 400)
+
+  const id = crypto.randomUUID()
+  const db = c.env.deepprint_auth
+
+  await db
+    .prepare('INSERT INTO templates (id, folder_id, user_id, name) VALUES (?, ?, ?, ?)')
+    .bind(id, folder_id, userId, name.trim())
+    .run()
+
+  return c.json({ id, folder_id, name: name.trim(), status: 'draft', updated_at: Math.floor(Date.now() / 1000) }, 201)
+})
+
+// GET /templates/:id — 获取单个模版详情（含 content 和 mock_data）
+app.get('/templates/:id', requireAuth, async (c) => {
+  const userId = (c.get('session') as any).user.id
+  const templateId = c.req.param('id')
+  const db = c.env.deepprint_auth
+
+  const result = await db
+    .prepare('SELECT * FROM templates WHERE id = ? AND user_id = ?')
+    .bind(templateId, userId)
+    .first()
+
+  if (!result) return c.json({ error: '模版不存在' }, 404)
+
+  // mock_data 存储为 JSON 字符串，返回时解析
+  let mockData: Record<string, unknown> = {}
+  try {
+    mockData = JSON.parse((result.mock_data as string) || '{}')
+  } catch {
+    mockData = {}
+  }
+
+  return c.json({ ...result, mock_data: mockData })
+})
+
+// PUT /templates/:id — 更新模版
+app.put('/templates/:id', requireAuth, async (c) => {
+  const userId = (c.get('session') as any).user.id
+  const templateId = c.req.param('id')
+  const body = await c.req.json<{
+    name?: string
+    content?: string
+    mock_data?: Record<string, unknown>
+    status?: string
+  }>()
+  const db = c.env.deepprint_auth
+
+  // 检查模版存在且属于当前用户
+  const existing = await db
+    .prepare('SELECT id FROM templates WHERE id = ? AND user_id = ?')
+    .bind(templateId, userId)
+    .first()
+
+  if (!existing) return c.json({ error: '模版不存在' }, 404)
+
+  // 动态构建 SET 子句
+  const sets: string[] = []
+  const values: (string | number)[] = []
+
+  if (body.name !== undefined) { sets.push('name = ?'); values.push(body.name) }
+  if (body.content !== undefined) { sets.push('content = ?'); values.push(body.content) }
+  if (body.mock_data !== undefined) { sets.push('mock_data = ?'); values.push(JSON.stringify(body.mock_data)) }
+  if (body.status !== undefined) { sets.push('status = ?'); values.push(body.status) }
+
+  if (sets.length === 0) return c.json({ error: '没有需要更新的字段' }, 400)
+
+  sets.push('updated_at = ?')
+  values.push(Math.floor(Date.now() / 1000))
+
+  values.push(templateId, userId)
+
+  await db
+    .prepare(`UPDATE templates SET ${sets.join(', ')} WHERE id = ? AND user_id = ?`)
+    .bind(...values)
+    .run()
+
+  return c.json({ success: true })
 })
 
 export const onRequest = handle(app)

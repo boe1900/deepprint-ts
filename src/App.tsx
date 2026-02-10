@@ -1,11 +1,12 @@
 import { useState, useEffect, useRef, useCallback, forwardRef, useImperativeHandle } from 'react';
+import { api, type FolderWithTemplates } from '@/lib/api-client';
 import { TypstDocument } from '@myriaddreamin/typst.react';
 import { type TypstCompiler, createTypstCompiler, preloadRemoteFonts, MemoryAccessModel, initOptions } from '@myriaddreamin/typst.ts';
 import { DefaultChatTransport } from 'ai';
 import Editor, { type OnMount } from '@monaco-editor/react';
 import * as monaco from 'monaco-editor';
 import {
-  Code2, Eye, Database,
+  Code2, Eye, Database, Save,
   PanelRightClose, PanelRight, Loader2,
   Sparkles, AlertCircle,
   ZoomIn, ZoomOut, RotateCcw, Maximize2,
@@ -27,6 +28,7 @@ import { LoginDialog } from '@/components/auth/login-dialog';
 // New layout components
 import TemplateTree from '@/components/TemplateTree';
 import DataEditorDialog from '@/components/DataEditorDialog';
+import { InputDialog } from '@/components/InputDialog';
 
 // =============================================================================
 // 🌌 Typst Universe 插件预加载 (编译时静态分析)
@@ -681,7 +683,18 @@ export default function DeepPrintStudio() {
   const [activeTab, setActiveTab] = useState<'preview' | 'code'>('preview');
   const [showDataModal, setShowDataModal] = useState(false);
   const [showLoginDialog, setShowLoginDialog] = useState(false);
-  const [activeTemplateId, setActiveTemplateId] = useState('t_receipt');
+  const [activeTemplateId, setActiveTemplateId] = useState('');
+
+  // API 数据状态
+  const [folders, setFolders] = useState<FolderWithTemplates[]>([]);
+  const [isLoadingFolders, setIsLoadingFolders] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+
+  // 新建弹窗状态
+  const [showCreateDialog, setShowCreateDialog] = useState(false);
+  const [createDialogMode, setCreateDialogMode] = useState<'folder' | 'template'>('folder');
+  const [createTargetFolderId, setCreateTargetFolderId] = useState('');
+  const [isCreating, setIsCreating] = useState(false);
 
   // TypstPreview ref for zoom controls
   const previewRef = useRef<TypstPreviewRef>(null);
@@ -691,10 +704,93 @@ export default function DeepPrintStudio() {
   useEffect(() => {
     authClient.getSession().then(({ data }) => {
       setSession(data);
+      if (!data?.user) setShowLoginDialog(true);
     }).catch(() => {
       setSession(null);
+      setShowLoginDialog(true);
     });
   }, []);
+
+  // 登录后加载分组列表
+  const loadFolders = useCallback(async () => {
+    setIsLoadingFolders(true);
+    try {
+      const data = await api.getFolders();
+      setFolders(data);
+    } catch {
+      // 未登录或网络错误时保持空列表
+      setFolders([]);
+    } finally {
+      setIsLoadingFolders(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (session?.user) {
+      loadFolders();
+    } else {
+      setFolders([]);
+    }
+  }, [session, loadFolders]);
+
+  // 选择模版 → 从 API 加载详情
+  const handleSelectTemplate = useCallback(async (id: string) => {
+    setActiveTemplateId(id);
+    try {
+      const detail = await api.getTemplate(id);
+      setCode(detail.content || DEFAULT_CODE);
+      setData(detail.mock_data && Object.keys(detail.mock_data).length > 0 ? detail.mock_data : DEFAULT_DATA);
+    } catch (err) {
+      console.error('加载模版失败:', err);
+    }
+  }, []);
+
+  // 保存当前模版
+  const handleSave = useCallback(async () => {
+    if (!activeTemplateId) return;
+    setIsSaving(true);
+    try {
+      await api.updateTemplate(activeTemplateId, { content: code, mock_data: data });
+    } catch (err) {
+      console.error('保存失败:', err);
+      alert('保存失败，请检查网络连接或登录状态');
+    } finally {
+      setIsSaving(false);
+    }
+  }, [activeTemplateId, code, data]);
+
+  // 打开新建分组弹窗
+  const handleCreateFolder = useCallback(() => {
+    setCreateDialogMode('folder');
+    setCreateTargetFolderId('');
+    setShowCreateDialog(true);
+  }, []);
+
+  // 打开新建模版弹窗
+  const handleCreateTemplate = useCallback((folderId: string) => {
+    setCreateDialogMode('template');
+    setCreateTargetFolderId(folderId);
+    setShowCreateDialog(true);
+  }, []);
+
+  // 弹窗确认回调
+  const handleCreateConfirm = useCallback(async (name: string) => {
+    setIsCreating(true);
+    try {
+      if (createDialogMode === 'folder') {
+        await api.createFolder(name);
+      } else {
+        const newTemplate = await api.createTemplate(createTargetFolderId, name);
+        handleSelectTemplate(newTemplate.id);
+      }
+      await loadFolders();
+      setShowCreateDialog(false);
+    } catch (err) {
+      console.error(`创建${createDialogMode === 'folder' ? '分组' : '模版'}失败:`, err);
+    } finally {
+      setIsCreating(false);
+    }
+  }, [createDialogMode, createTargetFolderId, loadFolders, handleSelectTemplate]);
 
   // 主题
   const { theme, resolvedTheme, cycleTheme } = useTheme();
@@ -758,8 +854,12 @@ export default function DeepPrintStudio() {
 
       {/* ─── 左侧栏：模版资源管理器 ─── */}
       <TemplateTree
+        groups={folders}
+        isLoading={isLoadingFolders}
         activeTemplateId={activeTemplateId}
-        onSelectTemplate={setActiveTemplateId}
+        onSelectTemplate={handleSelectTemplate}
+        onCreateFolder={handleCreateFolder}
+        onCreateTemplate={handleCreateTemplate}
         user={session?.user}
         onLogin={() => setShowLoginDialog(true)}
         onCycleTheme={cycleTheme}
@@ -855,6 +955,17 @@ export default function DeepPrintStudio() {
 
           {/* 右侧操作 */}
           <div className="flex items-center gap-3">
+            {activeTemplateId && (
+              <button
+                onClick={handleSave}
+                disabled={isSaving}
+                className="flex items-center gap-2 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-xs font-bold rounded-lg shadow-sm transition-all"
+              >
+                {isSaving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
+                {isSaving ? '保存中...' : '保存'}
+              </button>
+            )}
+
             <button
               onClick={() => setShowDataModal(true)}
               className="flex items-center gap-2 px-3 py-1.5 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 text-xs font-bold rounded-lg border border-slate-200 dark:border-slate-700 shadow-sm transition-all"
@@ -932,6 +1043,19 @@ export default function DeepPrintStudio() {
 
       {/* 登录对话框 */}
       <LoginDialog open={showLoginDialog} onOpenChange={setShowLoginDialog} />
+
+      {/* 新建分组 / 模版弹窗 */}
+      <InputDialog
+        open={showCreateDialog}
+        onOpenChange={setShowCreateDialog}
+        title={createDialogMode === 'folder' ? '新建业务分组' : '新建模版'}
+        description={createDialogMode === 'folder' ? '分组用于组织和管理你的模版' : '在当前分组中创建一个新的模版'}
+        placeholder={createDialogMode === 'folder' ? '例如：餐饮业务' : '例如：收银小票'}
+        defaultValue={createDialogMode === 'template' ? '未命名模版' : ''}
+        confirmLabel={createDialogMode === 'folder' ? '新建分组' : '新建模版'}
+        isLoading={isCreating}
+        onConfirm={handleCreateConfirm}
+      />
     </div>
   );
 }
