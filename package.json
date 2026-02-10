@@ -5,8 +5,8 @@
   "type": "module",
   "scripts": {
     "sync": "node scripts/update-universe.mjs",
-    "dev": "npm run sync && wrangler pages dev -- vite",
-    "dev:vite": "npm run sync && vite",
+    "dev": "npm run sync && vite",
+    "dev:full": "npm run build && wrangler pages dev ./dist",
     "build": "npm run sync && tsc -b && vite build",
     "lint": "eslint .",
     "preview": "wrangler pages dev ./dist",

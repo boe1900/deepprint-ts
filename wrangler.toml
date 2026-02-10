@@ -2,8 +2,6 @@ name = "deepprint-web"
 compatibility_date = "2026-02-05"
 compatibility_flags = ["nodejs_compat"]
 
-[functions]
-directory = "functions"
 
 [[d1_databases]]
 binding = "deepprint_auth"

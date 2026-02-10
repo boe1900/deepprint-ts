@@ -1,5 +1,6 @@
 import { Hono } from 'hono'
 import { handle } from 'hono/cloudflare-pages'
+import { createMiddleware } from 'hono/factory'
 import { streamText } from 'ai'
 import { createGoogleGenerativeAI } from '@ai-sdk/google'
 import { createAuth } from '../lib/auth'
@@ -13,7 +14,22 @@ type Bindings = {
   BETTER_AUTH_URL?: string
 }
 
-const app = new Hono<{ Bindings: Bindings }>().basePath('/api')
+type Variables = {
+  session: { user: { id: string; name: string; email: string; image?: string | null } }
+}
+
+const app = new Hono<{ Bindings: Bindings; Variables: Variables }>().basePath('/api')
+
+// 鉴权中间件 - 需要登录的路由加上 requireAuth 即可
+const requireAuth = createMiddleware<{ Bindings: Bindings; Variables: Variables }>(async (c, next) => {
+  const auth = createAuth(c.env, c.req.url)
+  const session = await auth.api.getSession({ headers: c.req.raw.headers })
+  if (!session) {
+    return c.json({ error: '请先登录' }, 401)
+  }
+  c.set('session', session as any)
+  await next()
+})
 
 // Auth 路由 - 处理所有 /api/auth/* 请求
 app.on(['GET', 'POST'], '/auth/*', (c) => {
@@ -74,8 +90,9 @@ app.get('/health', (c) => {
 })
 
 // AI 生成端点
-app.post('/generate', async (c) => {
+app.post('/generate', requireAuth, async (c) => {
   try {
+
     const { messages } = await c.req.json()
 
     const google = createGoogleGenerativeAI({
