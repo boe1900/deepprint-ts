@@ -1,6 +1,11 @@
 name = "deepprint-web"
 compatibility_date = "2026-02-05"
-pages_build_output_dir = "./dist"
+compatibility_flags = ["nodejs_compat"]
 
 [functions]
 directory = "functions"
+
+[[d1_databases]]
+binding = "deepprint_auth"
+database_name = "deepprint-auth"
+database_id = "3b9700b9-4e34-4fe6-beb3-c8507b7c12f3"

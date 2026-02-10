@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "sync": "node scripts/update-universe.mjs",
-    "dev": "npm run sync && vite",
+    "dev": "npm run sync && wrangler pages dev -- vite",
+    "dev:vite": "npm run sync && vite",
     "build": "npm run sync && tsc -b && vite build",
     "lint": "eslint .",
     "preview": "wrangler pages dev ./dist",
@@ -24,9 +25,12 @@
     "@myriaddreamin/typst.ts": "^0.6.0",
     "@tailwindcss/vite": "^4.1.18",
     "ai": "^6.0.77",
+    "better-auth": "^1.4.18",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "hono": "^4.11.8",
+    "kysely": "^0.28.11",
+    "kysely-d1": "^0.4.0",
     "lucide-react": "^0.563.0",
     "radix-ui": "^1.4.3",
     "react": "^19.2.0",
@@ -38,7 +42,7 @@
     "zustand": "^5.0.11"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20260206.0",
+    "@cloudflare/workers-types": "^4.20260210.0",
     "@eslint/js": "^9.39.1",
     "@types/node": "^24.10.1",
     "@types/react": "^19.2.5",

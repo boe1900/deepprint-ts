@@ -20,6 +20,11 @@ import { useChatRuntime } from '@assistant-ui/react-ai-sdk';
 import { AssistantRuntimeProvider } from '@assistant-ui/react';
 import { TooltipProvider } from '@/components/ui/tooltip';
 
+// Auth
+import { authClient } from '@/lib/auth-client';
+import { LoginDialog } from '@/components/auth/login-dialog';
+import { UserMenu } from '@/components/auth/user-menu';
+
 // =============================================================================
 // 🌌 Typst Universe 插件预加载 (编译时静态分析)
 // =============================================================================
@@ -698,6 +703,17 @@ export default function DeepPrintStudio() {
   // UI 状态
   const [showChat, setShowChat] = useState(true);
   const [activeTab, setActiveTab] = useState('code'); // 'code' | 'data'
+  const [showLoginDialog, setShowLoginDialog] = useState(false);
+
+  // Auth - fetch session on mount
+  const [session, setSession] = useState<{ user: { id?: string | null; name?: string | null; email?: string | null; image?: string | null; createdAt?: string | Date | null } } | null>(null);
+  useEffect(() => {
+    authClient.getSession().then(({ data }) => {
+      setSession(data);
+    }).catch(() => {
+      setSession(null);
+    });
+  }, []);
 
   // 主题
   const { theme, resolvedTheme, cycleTheme } = useTheme();
@@ -937,6 +953,19 @@ export default function DeepPrintStudio() {
             >
               <ThemeIcon size={18} />
             </button>
+
+            {/* 登录/用户菜单 */}
+            {session?.user ? (
+              <UserMenu user={session.user} />
+            ) : (
+              <button
+                onClick={() => setShowLoginDialog(true)}
+                className="px-3 py-1.5 text-xs font-medium rounded-lg bg-slate-900 dark:bg-white text-white dark:text-slate-900 hover:bg-slate-800 dark:hover:bg-slate-100 transition-colors"
+              >
+                登录
+              </button>
+            )}
+
             <span className="text-xs text-slate-400 dark:text-slate-500">
               DeepPrint v2.0
             </span>
@@ -1009,10 +1038,13 @@ export default function DeepPrintStudio() {
         </div>
       </div>
 
-      {/* 右侧：实时预览 */}
+      {/* Right: Live Preview */}
       <div className="flex-1 flex flex-col min-w-0 bg-slate-200 dark:bg-slate-300">
         <TypstPreview code={code} data={data} />
       </div>
+
+      {/* 登录对话框 */}
+      <LoginDialog open={showLoginDialog} onOpenChange={setShowLoginDialog} />
     </div>
   );
 }

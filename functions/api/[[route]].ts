@@ -2,12 +2,24 @@ import { Hono } from 'hono'
 import { handle } from 'hono/cloudflare-pages'
 import { streamText } from 'ai'
 import { createGoogleGenerativeAI } from '@ai-sdk/google'
+import { createAuth } from '../lib/auth'
 
 type Bindings = {
+  deepprint_auth: D1Database
   GOOGLE_GENERATIVE_AI_API_KEY: string
+  GITHUB_CLIENT_ID: string
+  GITHUB_CLIENT_SECRET: string
+  BETTER_AUTH_SECRET: string
+  BETTER_AUTH_URL?: string
 }
 
 const app = new Hono<{ Bindings: Bindings }>().basePath('/api')
+
+// Auth 路由 - 处理所有 /api/auth/* 请求
+app.on(['GET', 'POST'], '/auth/*', (c) => {
+  const auth = createAuth(c.env, c.req.url)
+  return auth.handler(c.req.raw)
+})
 
 const TYPST_SYSTEM_PROMPT = `你是一个 Typst 排版专家。请根据用户的需求生成 Typst 代码。
 

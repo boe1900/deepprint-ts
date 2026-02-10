@@ -32,5 +32,5 @@ export default defineConfig({
   // 暂时移除 alias 配置，等你接入 Assistant UI 时再加回来
   build: {
     target: 'esnext',
-  }
+  },
 })
