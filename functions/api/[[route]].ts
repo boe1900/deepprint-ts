@@ -173,13 +173,20 @@ app.post('/folders', requireAuth, async (c) => {
 
   const id = crypto.randomUUID()
   const db = c.env.deepprint_auth
+  const trimmedName = name.trim()
+
+  const duplicate = await db
+    .prepare('SELECT id FROM folders WHERE user_id = ? AND lower(name) = lower(?) LIMIT 1')
+    .bind(userId, trimmedName)
+    .first()
+  if (duplicate) return c.json({ error: '分组名称不能重复' }, 409)
 
   await db
     .prepare('INSERT INTO folders (id, user_id, name) VALUES (?, ?, ?)')
-    .bind(id, userId, name.trim())
+    .bind(id, userId, trimmedName)
     .run()
 
-  return c.json({ id, name: name.trim(), sort_order: 0 }, 201)
+  return c.json({ id, name: trimmedName, sort_order: 0 }, 201)
 })
 
 // PUT /folders/:id — 更新分组
@@ -200,9 +207,16 @@ app.put('/folders/:id', requireAuth, async (c) => {
     return c.json({ error: '分组名称不能为空' }, 400)
   }
 
+  const trimmedName = body.name.trim()
+  const duplicate = await db
+    .prepare('SELECT id FROM folders WHERE user_id = ? AND lower(name) = lower(?) AND id != ? LIMIT 1')
+    .bind(userId, trimmedName, folderId)
+    .first()
+  if (duplicate) return c.json({ error: '分组名称不能重复' }, 409)
+
   await db
     .prepare('UPDATE folders SET name = ? WHERE id = ? AND user_id = ?')
-    .bind(body.name.trim(), folderId, userId)
+    .bind(trimmedName, folderId, userId)
     .run()
 
   return c.json({ success: true })
@@ -249,13 +263,20 @@ app.post('/templates', requireAuth, async (c) => {
 
   const id = crypto.randomUUID()
   const db = c.env.deepprint_auth
+  const trimmedName = name.trim()
+
+  const duplicate = await db
+    .prepare('SELECT id FROM templates WHERE user_id = ? AND folder_id = ? AND lower(name) = lower(?) LIMIT 1')
+    .bind(userId, folder_id, trimmedName)
+    .first()
+  if (duplicate) return c.json({ error: '同一分组下模版名称不能重复' }, 409)
 
   await db
     .prepare('INSERT INTO templates (id, folder_id, user_id, name) VALUES (?, ?, ?, ?)')
-    .bind(id, folder_id, userId, name.trim())
+    .bind(id, folder_id, userId, trimmedName)
     .run()
 
-  return c.json({ id, folder_id, name: name.trim(), status: 'draft', updated_at: Math.floor(Date.now() / 1000) }, 201)
+  return c.json({ id, folder_id, name: trimmedName, status: 'draft', updated_at: Math.floor(Date.now() / 1000) }, 201)
 })
 
 // GET /templates/:id — 获取单个模版详情（含 content 和 mock_data）
@@ -296,7 +317,7 @@ app.put('/templates/:id', requireAuth, async (c) => {
 
   // 检查模版存在且属于当前用户
   const existing = await db
-    .prepare('SELECT id FROM templates WHERE id = ? AND user_id = ?')
+    .prepare('SELECT id, folder_id FROM templates WHERE id = ? AND user_id = ?')
     .bind(templateId, userId)
     .first()
 
@@ -306,7 +327,17 @@ app.put('/templates/:id', requireAuth, async (c) => {
   const sets: string[] = []
   const values: (string | number)[] = []
 
-  if (body.name !== undefined) { sets.push('name = ?'); values.push(body.name) }
+  if (body.name !== undefined) {
+    const trimmedName = body.name.trim()
+    if (!trimmedName) return c.json({ error: '模版名称不能为空' }, 400)
+    const duplicate = await db
+      .prepare('SELECT id FROM templates WHERE user_id = ? AND folder_id = ? AND lower(name) = lower(?) AND id != ? LIMIT 1')
+      .bind(userId, (existing as any).folder_id, trimmedName, templateId)
+      .first()
+    if (duplicate) return c.json({ error: '同一分组下模版名称不能重复' }, 409)
+    sets.push('name = ?')
+    values.push(trimmedName)
+  }
   if (body.content !== undefined) { sets.push('content = ?'); values.push(body.content) }
   if (body.mock_data !== undefined) { sets.push('mock_data = ?'); values.push(JSON.stringify(body.mock_data)) }
   if (body.status !== undefined) { sets.push('status = ?'); values.push(body.status) }

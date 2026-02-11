@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, forwardRef, useImperativeHandle } from 'react';
-import { api, type FolderWithTemplates } from '@/lib/api-client';
+import { api, ApiError, type FolderWithTemplates } from '@/lib/api-client';
 import { TypstDocument } from '@myriaddreamin/typst.react';
 import { type TypstCompiler, createTypstCompiler, preloadRemoteFonts, MemoryAccessModel, initOptions } from '@myriaddreamin/typst.ts';
 import { DefaultChatTransport } from 'ai';
@@ -11,7 +11,7 @@ import {
   Sparkles, AlertCircle,
   ZoomIn, ZoomOut, RotateCcw, Maximize2,
   Sun, Moon, Monitor,
-  Bold, Italic, Underline, Heading, List, ListOrdered, Code, Download
+  Bold, Italic, Underline, Heading, List, ListOrdered, Code, Download, Lock
 } from 'lucide-react';
 import { useTheme, THEMES } from './hooks/useTheme';
 
@@ -341,7 +341,8 @@ const TypstPreview = forwardRef<
             'NotoSansSC-Bold.ttf',
             'NotoSansSC-Regular.ttf',
             'NotoSerifSC-Bold.ttf',
-            'NotoSerifSC-Regular.ttf'
+            'NotoSerifSC-Regular.ttf',
+            "NotoEmoji-VariableFont_wght.ttf"
           ];
 
           console.log(`正在加载 ${fontFiles.length} 个字体...`);
@@ -524,100 +525,99 @@ const TypstPreview = forwardRef<
 
 // 默认 Typst 代码
 const DEFAULT_CODE = `
-// ==========================================
-// 1. 页面与字体设置 (80mm 热敏纸标准)
-// ==========================================
-#set page(width: 80mm, height: auto, margin: 5mm)
-// 优先使用中文字体，回退到 Arial
-#set text(font: ("Noto Sans SC", "Arial"), size: 10pt)
+// DeepPrint Default Template
+// 优化：使用 A5 纸张，视觉更紧凑；边距适中
+#set page(paper: "a5", margin: (x: 1.5cm, y: 1.5cm))
+#set text(font: "Noto Sans SC", size: 10pt, lang: "zh")
 
-// ==========================================
-// 2. 引入官方扩展包 (全能条码库)
-// ==========================================
-// 确保您已运行 npm run sync 下载了此包
-#import "@preview/tiaoma:0.3.0"
+// 1. 安全获取数据
+//#let data = json.decode(sys.inputs.data)
 
-// ==========================================
-// 3. 票据头部
-// ==========================================
+// 定义一些辅助颜色和样式
+#let primary-color = rgb("#2563eb")
+#let bg-color = rgb("#eff6ff")
+#let code-block(content) = rect(
+  fill: luma(245),
+  stroke: luma(220),
+  inset: 8pt,
+  radius: 4pt,
+  width: 100%,
+  text(font: "Cascadia Code", size: 8pt, fill: luma(80), content)
+)
+
+// 2. 页面布局
 #align(center)[
-  #text(1.5em, weight: "bold")[DeepPrint 智慧餐饮]
-  #v(0.5em)
-  #text(0.9em)[-- 收银小票 --]
-]
+  // --- 顶部 Header ---
+  #block(inset: (bottom: 1em))[
+    #text(2.2em, weight: "black", fill: primary-color)[DeepPrint]
+    #h(0.5em)
+    #text(1.2em, weight: "bold", fill: gray)[智能打印模版]
+  ]
 
-#v(0.5em)
-#line(length: 100%, stroke: (dash: "dashed", thickness: 1pt))
+  // --- 核心引导卡片 ---
+  #rect(
+    width: 100%,
+    radius: 8pt,
+    stroke: none,
+    fill: bg-color,
+    inset: 1.5em
+  )[
+    #set align(left)
+    #grid(
+      columns: (auto, 1fr),
+      gutter: 1em,
+      // 左侧图标（用emoji代替）
+      text(2.5em)[🚀],
+      // 右侧文字
+      [
+        #text(1.2em, weight: "bold", fill: primary-color)[模版已就绪] \
+        #v(0.5em)
+        这是一个全新的空白画布。您可以直接在此处编写 Typst 代码，或者呼叫 *DeepPrint AI 助手* 帮您生成。
+      ]
+    )
+  ]
 
-// ==========================================
-// 4. 订单基础信息 (Grid 布局)
-// ==========================================
-// 直接使用注入的 data 变量
-#grid(
-  columns: (1fr, auto), // 左侧撑满，右侧自适应
-  row-gutter: 0.8em,    // 行间距
-  [订单编号], [#text(font: "IBM Plex Mono")[#data.order_id]],
-  [打印时间], [#data.time],
-)
+  #v(2em)
 
-#v(0.5em)
-#line(length: 100%, stroke: (dash: "dashed"))
-
-// ==========================================
-// 5. 商品列表
-// ==========================================
-#grid(
-  columns: (1fr, auto),
-  row-gutter: 0.6em,
-  // 表头
-  text(weight: "bold")[商品名称], text(weight: "bold")[金额],
-  
-  // 遍历 JSON 中的 items 数组
-  ..data.items.map(item => (
-    item.name, 
-    // 假设价格是数字，这里格式化一下，或者直接输出字符串
-    "¥" + str(item.price)
-  )).flatten()
-)
-
-#v(0.5em)
-#line(length: 100%, stroke: (thickness: 1pt))
-
-// ==========================================
-// 6. 金额汇总
-// ==========================================
-#align(right)[
+  // --- 功能展示区 (让画面不那么空) ---
   #grid(
-    columns: 2,
+    columns: (1fr, 1fr),
     gutter: 1em,
-    [应收金额:], 
-    text(1.4em, weight: "bold")[¥#data.total]
+    [
+      #set align(left)
+      #text(weight: "bold", fill: luma(100))[📝 常用指令示例]
+      #v(0.5em)
+      - 生成 *销售出库单*
+      - 设计 *100x150 面单*
+      - 添加 *二维码* 和 *Logo*
+      - 绑定 *JSON 数据*
+    ],
+    [
+      #set align(left)
+      #text(weight: "bold", fill: luma(100))[📊 数据绑定预览]
+      #v(0.5em)
+      // 模拟一个简单的数据展示，让用户知道数据去哪了
+      #code-block(
+        if data.keys().len() == 0 [
+          // 空数据时的占位
+          { "message": "No Data" }
+        ] else [
+          // 有数据时显示 Keys
+          #data
+        ]
+      )
+    ]
   )
-]
+  
+  #v(2fr) // 撑开空间，把页脚推到底部
 
-#v(1em)
-
-// ==========================================
-// 7. 底部条码区 (使用 tiaoma 库)
-// ==========================================
-#align(center)[
-  // Code 128 条形码 (用于扫码枪回单)
-  #tiaoma.code128(data.order_id, height: 1.2cm)
-  #v(0.2em)
-  #text(0.7em, fill: gray)[凭小票至前台开具发票]
-  
-  #v(1em)
-  
-  // 二维码 (用于小程序/支付)
-  // tiaoma.qrcode 也支持 width 参数，自动缩放
-  #tiaoma.qrcode("https://deepprint.ai/order/" + data.order_id, width: 2.5cm)
-  
+  // --- 页脚 ---
+  #line(length: 100%, stroke: 0.5pt + gray)
   #v(0.5em)
-  #text(0.8em)[扫码加会员，首单立减]
+  #text(0.8em, fill: gray)[
+    DeepPrint Studio · 现在的纸张大小是 A5
+  ]
 ]
-
-// 页脚留白，防止打印机切纸切到内容
-#v(1cm)
 `;
 
 // 默认数据
@@ -735,6 +735,7 @@ export default function DeepPrintStudio() {
   const [createDialogMode, setCreateDialogMode] = useState<'folder' | 'template'>('folder');
   const [createTargetFolderId, setCreateTargetFolderId] = useState('');
   const [isCreating, setIsCreating] = useState(false);
+  const [createError, setCreateError] = useState('');
 
   // 重命名弹窗状态
   const [showRenameDialog, setShowRenameDialog] = useState(false);
@@ -742,6 +743,7 @@ export default function DeepPrintStudio() {
   const [renameTargetId, setRenameTargetId] = useState('');
   const [renameDefaultValue, setRenameDefaultValue] = useState('');
   const [isRenaming, setIsRenaming] = useState(false);
+  const [renameError, setRenameError] = useState('');
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [deleteDialogMode, setDeleteDialogMode] = useState<'folder' | 'template'>('folder');
   const [deleteTargetId, setDeleteTargetId] = useState('');
@@ -750,6 +752,10 @@ export default function DeepPrintStudio() {
   const [deleteBlockedMessage, setDeleteBlockedMessage] = useState('');
   const [isDeleting, setIsDeleting] = useState(false);
   const [isExportingPdf, setIsExportingPdf] = useState(false);
+  const [showBlankDialog, setShowBlankDialog] = useState(false);
+  const [blankFolderId, setBlankFolderId] = useState('');
+  const [blankError, setBlankError] = useState('');
+  const [returnToBlankAfterCreateFolder, setReturnToBlankAfterCreateFolder] = useState(false);
 
   // TypstPreview ref for zoom controls
   const previewRef = useRef<TypstPreviewRef>(null);
@@ -759,10 +765,8 @@ export default function DeepPrintStudio() {
   useEffect(() => {
     authClient.getSession().then(({ data }) => {
       setSession(data);
-      if (!data?.user) setShowLoginDialog(true);
     }).catch(() => {
       setSession(null);
-      setShowLoginDialog(true);
     });
   }, []);
 
@@ -787,6 +791,9 @@ export default function DeepPrintStudio() {
       setFolders([]);
     }
   }, [session, loadFolders]);
+
+  const isAuthed = !!session?.user;
+  const hasActiveTemplate = !!activeTemplateId;
 
   // 选择模版 → 从 API 加载详情
   const handleSelectTemplate = useCallback(async (id: string) => {
@@ -818,6 +825,7 @@ export default function DeepPrintStudio() {
   const handleCreateFolder = useCallback(() => {
     setCreateDialogMode('folder');
     setCreateTargetFolderId('');
+    setCreateError('');
     setShowCreateDialog(true);
   }, []);
 
@@ -825,32 +833,129 @@ export default function DeepPrintStudio() {
   const handleCreateTemplate = useCallback((folderId: string) => {
     setCreateDialogMode('template');
     setCreateTargetFolderId(folderId);
+    setCreateError('');
     setShowCreateDialog(true);
   }, []);
 
+  // 预留：热门模板选择上线后，恢复一键套用逻辑
+  // const handleQuickStart = useCallback(() => {
+  //   const allTemplates = folders.flatMap(f => f.templates);
+  //   if (allTemplates.length > 0) {
+  //     handleSelectTemplate(allTemplates[0].id);
+  //     return;
+  //   }
+  //   if (folders.length > 0) {
+  //     setCreateDialogMode('template');
+  //     setCreateTargetFolderId(folders[0].id);
+  //     setShowCreateDialog(true);
+  //     return;
+  //   }
+  //   setCreateDialogMode('folder');
+  //   setCreateTargetFolderId('');
+  //   setShowCreateDialog(true);
+  // }, [folders, handleSelectTemplate]);
+
+  const handleCreateBlankTemplate = useCallback(() => {
+    setBlankError('');
+    if (folders.length > 0) {
+      setBlankFolderId(folders[0].id);
+    } else {
+      setBlankFolderId('');
+    }
+    setShowBlankDialog(true);
+  }, [folders]);
+
+  const handleCreateBlankConfirm = useCallback(async (name: string) => {
+    const nextName = name.trim();
+    if (!nextName) {
+      setBlankError('名称不能为空');
+      return;
+    }
+    if (!blankFolderId) {
+      setBlankError('请先选择分组');
+      return;
+    }
+    setIsCreating(true);
+    try {
+      const targetFolder = folders.find(f => f.id === blankFolderId);
+      const hasDuplicate = targetFolder?.templates?.some(t => t.name.trim().toLowerCase() === nextName.toLowerCase());
+      if (hasDuplicate) {
+        setBlankError('同一分组下模版名称不能重复');
+        return;
+      }
+      const newTemplate = await api.createTemplate(blankFolderId, nextName);
+      handleSelectTemplate(newTemplate.id);
+      await loadFolders();
+      setShowBlankDialog(false);
+    } catch (err) {
+      if (err instanceof ApiError) {
+        if (err.status === 409) {
+          setBlankError('同一分组下模版名称不能重复');
+        } else if (err.status === 400) {
+          setBlankError(err.message || '名称不合法');
+        } else {
+          setBlankError(err.message || '创建失败，请稍后再试');
+        }
+      } else {
+        setBlankError(err instanceof Error ? err.message : '创建失败，请稍后再试');
+      }
+    } finally {
+      setIsCreating(false);
+    }
+  }, [blankFolderId, folders, handleSelectTemplate, loadFolders]);
+
   // 弹窗确认回调
   const handleCreateConfirm = useCallback(async (name: string) => {
+    const nextName = name.trim();
+    if (!nextName) {
+      setCreateError('名称不能为空');
+      return;
+    }
     setIsCreating(true);
     try {
       if (createDialogMode === 'folder') {
-        await api.createFolder(name);
+        const createdFolder = await api.createFolder(nextName);
+        await loadFolders();
+        if (returnToBlankAfterCreateFolder) {
+          setReturnToBlankAfterCreateFolder(false);
+          setBlankFolderId(createdFolder.id);
+          setShowBlankDialog(true);
+          setShowCreateDialog(false);
+          return;
+        }
       } else {
-        const newTemplate = await api.createTemplate(createTargetFolderId, name);
+        const targetFolder = folders.find(f => f.id === createTargetFolderId);
+        const hasDuplicate = targetFolder?.templates?.some(t => t.name.trim().toLowerCase() === nextName.toLowerCase());
+        if (hasDuplicate) {
+          setCreateError('同一分组下模版名称不能重复');
+          return;
+        }
+        const newTemplate = await api.createTemplate(createTargetFolderId, nextName);
         handleSelectTemplate(newTemplate.id);
       }
       await loadFolders();
       setShowCreateDialog(false);
     } catch (err) {
       console.error(`创建${createDialogMode === 'folder' ? '分组' : '模版'}失败:`, err);
+      if (err instanceof ApiError) {
+        if (err.status === 409) {
+          setCreateError(createDialogMode === 'folder' ? '分组名称不能重复' : '同一分组下模版名称不能重复');
+        } else if (err.status === 400) {
+          setCreateError(err.message || '名称不合法');
+        } else {
+          setCreateError(err.message || '创建失败，请稍后再试');
+        }
+      }
     } finally {
       setIsCreating(false);
     }
-  }, [createDialogMode, createTargetFolderId, loadFolders, handleSelectTemplate]);
+  }, [createDialogMode, createTargetFolderId, loadFolders, handleSelectTemplate, returnToBlankAfterCreateFolder]);
 
   const handleRenameFolder = useCallback((id: string, name: string) => {
     setRenameDialogMode('folder');
     setRenameTargetId(id);
     setRenameDefaultValue(name);
+    setRenameError('');
     setShowRenameDialog(true);
   }, []);
 
@@ -858,22 +963,46 @@ export default function DeepPrintStudio() {
     setRenameDialogMode('template');
     setRenameTargetId(id);
     setRenameDefaultValue(name);
+    setRenameError('');
     setShowRenameDialog(true);
   }, []);
 
   const handleRenameConfirm = useCallback(async (name: string) => {
+    const nextName = name.trim();
+    if (!nextName) {
+      setRenameError('名称不能为空');
+      return;
+    }
     setIsRenaming(true);
     try {
       if (renameDialogMode === 'folder') {
-        await api.updateFolder(renameTargetId, { name });
+        await api.updateFolder(renameTargetId, { name: nextName });
       } else {
-        await api.updateTemplate(renameTargetId, { name });
+        const targetFolder = folders.find(f => f.templates.some(t => t.id === renameTargetId));
+        const hasDuplicate = targetFolder?.templates?.some(t =>
+          t.id !== renameTargetId && t.name.trim().toLowerCase() === nextName.toLowerCase()
+        );
+        if (hasDuplicate) {
+          setRenameError('同一分组下模版名称不能重复');
+          return;
+        }
+        await api.updateTemplate(renameTargetId, { name: nextName });
       }
       await loadFolders();
       setShowRenameDialog(false);
     } catch (err) {
       console.error(`重命名${renameDialogMode === 'folder' ? '分组' : '模版'}失败:`, err);
-      alert(err instanceof Error ? err.message : '操作失败');
+      if (err instanceof ApiError) {
+        if (err.status === 409) {
+          setRenameError(renameDialogMode === 'folder' ? '分组名称不能重复' : '同一分组下模版名称不能重复');
+        } else if (err.status === 400) {
+          setRenameError(err.message || '名称不合法');
+        } else {
+          setRenameError(err.message || '操作失败');
+        }
+      } else {
+        setRenameError(err instanceof Error ? err.message : '操作失败');
+      }
     } finally {
       setIsRenaming(false);
     }
@@ -1045,6 +1174,7 @@ export default function DeepPrintStudio() {
         onCycleTheme={cycleTheme}
         themeLabel={themeLabel}
         ThemeIcon={ThemeIcon}
+        isAuthed={isAuthed}
       />
 
       {/* ─── 中间栏：预览 + 代码 ─── */}
@@ -1057,20 +1187,24 @@ export default function DeepPrintStudio() {
             {/* Tab 切换：预览 / 代码 */}
             <div className="flex gap-1 bg-slate-100 dark:bg-slate-800 p-1 rounded-lg">
               <button
-                onClick={() => setActiveTab('preview')}
+                onClick={() => isAuthed && setActiveTab('preview')}
+                disabled={!isAuthed}
+                title={!isAuthed ? '登录后可使用' : undefined}
                 className={`px-3 py-1.5 rounded-md text-xs font-medium flex items-center gap-1.5 transition-all ${activeTab === 'preview'
                   ? 'bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-sm'
                   : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
-                  }`}
+                  } ${!isAuthed ? 'opacity-50 cursor-not-allowed hover:text-slate-500 dark:hover:text-slate-400' : ''}`}
               >
                 <Eye size={14} /> 预览
               </button>
               <button
-                onClick={() => setActiveTab('code')}
+                onClick={() => isAuthed && setActiveTab('code')}
+                disabled={!isAuthed}
+                title={!isAuthed ? '登录后可使用' : undefined}
                 className={`px-3 py-1.5 rounded-md text-xs font-medium flex items-center gap-1.5 transition-all ${activeTab === 'code'
                   ? 'bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-sm'
                   : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
-                  }`}
+                  } ${!isAuthed ? 'opacity-50 cursor-not-allowed hover:text-slate-500 dark:hover:text-slate-400' : ''}`}
               >
                 <Code2 size={14} /> 代码
               </button>
@@ -1079,7 +1213,7 @@ export default function DeepPrintStudio() {
             <div className="h-5 w-px bg-slate-200 dark:bg-slate-700" />
 
             {/* 缩放控制 - 仅在预览模式显示 */}
-            {activeTab === 'preview' && (
+            {activeTab === 'preview' && hasActiveTemplate && (
               <div className="flex items-center gap-1">
                 <button onClick={() => previewRef.current?.zoomOut()} className="p-1.5 rounded hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-500 dark:text-slate-400" title="缩小">
                   <ZoomOut size={15} />
@@ -1135,7 +1269,7 @@ export default function DeepPrintStudio() {
 
           {/* 右侧操作 */}
           <div className="flex items-center gap-3">
-            {activeTemplateId && (
+            {hasActiveTemplate && (
               <button
                 onClick={handleSave}
                 disabled={isSaving}
@@ -1148,16 +1282,17 @@ export default function DeepPrintStudio() {
 
             <button
               onClick={() => setShowDataModal(true)}
-              className="flex items-center gap-2 px-3 py-1.5 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 text-xs font-bold rounded-lg border border-slate-200 dark:border-slate-700 shadow-sm transition-all"
+              disabled={!hasActiveTemplate}
+              className="flex items-center gap-2 px-3 py-1.5 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 disabled:opacity-50 text-slate-600 dark:text-slate-300 text-xs font-bold rounded-lg border border-slate-200 dark:border-slate-700 shadow-sm transition-all"
             >
               <Database size={14} className="text-green-600 dark:text-green-400" /> 模拟数据
             </button>
 
             <button
               onClick={handleExportPdf}
-              disabled={isExportingPdf || activeTab !== 'preview'}
+              disabled={isExportingPdf || activeTab !== 'preview' || !hasActiveTemplate}
               className="flex items-center gap-2 px-3 py-1.5 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 disabled:opacity-50 text-slate-600 dark:text-slate-300 text-xs font-bold rounded-lg border border-slate-200 dark:border-slate-700 shadow-sm transition-all"
-              title={activeTab !== 'preview' ? '切换到预览后可导出' : '导出 PDF'}
+              title={!hasActiveTemplate ? '请选择或新建模版后导出' : (activeTab !== 'preview' ? '切换到预览后可导出' : '导出 PDF')}
             >
               {isExportingPdf ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} className="text-slate-500 dark:text-slate-400" />}
               {isExportingPdf ? '导出中...' : '导出 PDF'}
@@ -1181,34 +1316,115 @@ export default function DeepPrintStudio() {
           {/* 预览 Tab */}
           {activeTab === 'preview' && (
             <div className="w-full h-full bg-slate-200 dark:bg-slate-800">
-              <TypstPreview
-                ref={previewRef}
-                code={code}
-                data={data}
-                onZoomChange={setPreviewZoom}
-              />
+              {hasActiveTemplate ? (
+                <TypstPreview
+                  ref={previewRef}
+                  code={code}
+                  data={data}
+                  onZoomChange={setPreviewZoom}
+                />
+              ) : (
+                <div className="w-full h-full flex items-center justify-center">
+                  <div className="max-w-[520px] text-center px-6">
+                    <div className="mx-auto w-16 h-16 rounded-2xl bg-white/70 dark:bg-slate-900/60 border border-white/60 dark:border-slate-700/60 shadow-sm flex items-center justify-center">
+                      <Sparkles size={22} className="text-slate-500 dark:text-slate-300" />
+                    </div>
+                    <h2 className="mt-4 text-lg font-bold text-slate-900 dark:text-white">先选一个模板开始</h2>
+                    <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">
+                      选择一个模板，我们会帮你自动填好结构，快速进入编辑。
+                    </p>
+                    <div className="mt-5 flex items-center justify-center gap-3">
+                      <button
+                        disabled
+                        title="热门模板选择，敬请期待"
+                        className="px-4 py-2 rounded-lg bg-slate-900 text-white text-sm font-semibold shadow-sm opacity-50 cursor-not-allowed"
+                      >
+                        热门模板选择，敬请期待
+                      </button>
+                      <button
+                        onClick={handleCreateBlankTemplate}
+                        className="px-4 py-2 rounded-lg bg-white/80 dark:bg-slate-900/70 border border-slate-200 dark:border-slate-700 text-sm font-semibold text-slate-700 dark:text-slate-200 hover:bg-white"
+                      >
+                        从空白开始
+                      </button>
+                    </div>
+                    <p className="mt-4 text-xs text-slate-400">
+                      也可以在左侧新建或选择模板
+                    </p>
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
           {/* 代码 Tab */}
           {activeTab === 'code' && (
-            <Editor
-              height="100%"
-              defaultLanguage="markdown"
-              theme={resolvedTheme === 'dark' ? 'vs-dark' : 'light'}
-              value={code}
-              onChange={(value) => setCode(value || '')}
-              onMount={handleEditorMount}
-              options={{
-                fontSize: 14,
-                fontFamily: 'JetBrains Mono, Menlo, Monaco, monospace',
-                minimap: { enabled: false },
-                lineNumbers: 'on',
-                wordWrap: 'on',
-                padding: { top: 16 },
-                scrollBeyondLastLine: false,
-              }}
-            />
+            hasActiveTemplate ? (
+              <Editor
+                height="100%"
+                defaultLanguage="markdown"
+                theme={resolvedTheme === 'dark' ? 'vs-dark' : 'light'}
+                value={code}
+                onChange={(value) => setCode(value || '')}
+                onMount={handleEditorMount}
+                options={{
+                  fontSize: 14,
+                  fontFamily: 'JetBrains Mono, Menlo, Monaco, monospace',
+                  minimap: { enabled: false },
+                  lineNumbers: 'on',
+                  wordWrap: 'on',
+                  padding: { top: 16 },
+                  scrollBeyondLastLine: false,
+                }}
+              />
+            ) : (
+              <div className="w-full h-full flex items-center justify-center bg-slate-50 dark:bg-slate-900">
+                <div className="max-w-[520px] text-center px-6">
+                  <div className="mx-auto w-16 h-16 rounded-2xl bg-white/70 dark:bg-slate-900/60 border border-slate-200 dark:border-slate-700 shadow-sm flex items-center justify-center">
+                    <Code2 size={22} className="text-slate-500 dark:text-slate-300" />
+                  </div>
+                  <h2 className="mt-4 text-lg font-bold text-slate-900 dark:text-white">先选模板再开始编辑</h2>
+                  <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">
+                    选择一个模板或新建一个空白模板后，代码编辑器会在这里出现。
+                  </p>
+                  <div className="mt-5 flex items-center justify-center gap-3">
+                    <button
+                      disabled
+                      title="热门模板选择，敬请期待"
+                      className="px-4 py-2 rounded-lg bg-slate-900 text-white text-sm font-semibold shadow-sm opacity-50 cursor-not-allowed"
+                    >
+                      热门模板选择，敬请期待
+                    </button>
+                    <button
+                      onClick={handleCreateBlankTemplate}
+                      className="px-4 py-2 rounded-lg bg-white/80 dark:bg-slate-900/70 border border-slate-200 dark:border-slate-700 text-sm font-semibold text-slate-700 dark:text-slate-200 hover:bg-white"
+                    >
+                      从空白开始
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )
+          )}
+
+          {!isAuthed && (
+            <div className="absolute inset-0 bg-white/60 dark:bg-slate-900/70 backdrop-blur-sm z-10 flex items-center justify-center">
+              <div className="max-w-[420px] w-[86%] bg-white/90 dark:bg-slate-900/90 border border-white/70 dark:border-slate-700/60 shadow-xl rounded-2xl p-6 text-center">
+                <div className="mx-auto w-12 h-12 rounded-xl bg-gradient-to-br from-slate-900 to-slate-700 text-white flex items-center justify-center shadow-sm">
+                  <Lock size={18} />
+                </div>
+                <h2 className="mt-4 text-base font-bold text-slate-900 dark:text-white">登录后开始制作</h2>
+                <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">
+                  登录后可保存模板、导出 PDF，并使用更多功能。
+                </p>
+                <button
+                  onClick={() => setShowLoginDialog(true)}
+                  className="mt-4 w-full px-4 py-2 rounded-lg bg-slate-900 text-white text-sm font-semibold hover:bg-slate-800"
+                >
+                  使用 GitHub 登录
+                </button>
+              </div>
+            </div>
           )}
         </div>
 
@@ -1242,26 +1458,71 @@ export default function DeepPrintStudio() {
       {/* 新建分组 / 模版弹窗 */}
       <InputDialog
         open={showCreateDialog}
-        onOpenChange={setShowCreateDialog}
+        onOpenChange={(open) => {
+          setShowCreateDialog(open);
+          if (!open) setCreateError('');
+        }}
         title={createDialogMode === 'folder' ? '新建业务分组' : '新建模版'}
         description={createDialogMode === 'folder' ? '分组用于组织和管理你的模版' : '在当前分组中创建一个新的模版'}
         placeholder={createDialogMode === 'folder' ? '例如：餐饮业务' : '例如：收银小票'}
         defaultValue={createDialogMode === 'template' ? '未命名模版' : ''}
         confirmLabel={createDialogMode === 'folder' ? '新建分组' : '新建模版'}
         isLoading={isCreating}
+        errorMessage={createError}
+        onValueChange={() => setCreateError('')}
         onConfirm={handleCreateConfirm}
       />
 
       <InputDialog
         open={showRenameDialog}
-        onOpenChange={setShowRenameDialog}
+        onOpenChange={(open) => {
+          setShowRenameDialog(open);
+          if (!open) setRenameError('');
+        }}
         title={renameDialogMode === 'folder' ? '重命名业务分组' : '重命名模版'}
         description={renameDialogMode === 'folder' ? '修改分组名称' : '修改模版名称'}
         placeholder={renameDialogMode === 'folder' ? '例如：餐饮业务' : '例如：收银小票'}
         defaultValue={renameDefaultValue}
         confirmLabel="重命名"
         isLoading={isRenaming}
+        errorMessage={renameError}
+        onValueChange={() => setRenameError('')}
         onConfirm={handleRenameConfirm}
+      />
+
+      <InputDialog
+        open={showBlankDialog}
+        onOpenChange={(open) => {
+          setShowBlankDialog(open);
+          if (!open) setBlankError('');
+        }}
+        title="选择分组并创建模版"
+        description="将空白模板放入指定分组，方便后续管理"
+        placeholder="例如：收银小票"
+        defaultValue="未命名模版"
+        confirmLabel="创建模版"
+        isLoading={isCreating}
+        errorMessage={blankError}
+        onValueChange={() => setBlankError('')}
+        confirmDisabled={!blankFolderId}
+        selectLabel="放入分组"
+        selectValue={blankFolderId}
+        selectOptions={folders.map(f => ({ value: f.id, label: f.name }))}
+        selectPlaceholder={folders.length > 0 ? '请选择分组' : '暂无分组'}
+        onSelectChange={(value) => {
+          setBlankFolderId(value);
+          setBlankError('');
+        }}
+        selectActionLabel="新建分组"
+        onSelectAction={() => {
+          setShowBlankDialog(false);
+          setCreateDialogMode('folder');
+          setCreateTargetFolderId('');
+          setCreateError('');
+          setReturnToBlankAfterCreateFolder(true);
+          setShowCreateDialog(true);
+        }}
+        onConfirm={handleCreateBlankConfirm}
       />
 
       <ConfirmDialog

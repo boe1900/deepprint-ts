@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import type { LucideIcon } from 'lucide-react';
 import {
     ChevronRight, ChevronDown, Folder, FileText,
@@ -26,6 +26,7 @@ interface TemplateTreeProps {
     onCycleTheme?: () => void;
     themeLabel?: string;
     ThemeIcon?: LucideIcon;
+    isAuthed?: boolean;
 }
 
 // ─── Component ───────────────────────────────────────────────────────────────
@@ -34,7 +35,7 @@ export default function TemplateTree({
     groups, isLoading, activeTemplateId, onSelectTemplate,
     onCreateFolder, onCreateTemplate,
     onRenameFolder, onDeleteFolder, onRenameTemplate, onDeleteTemplate,
-    user, onLogin, onCycleTheme, themeLabel, ThemeIcon,
+    user, onLogin, onCycleTheme, themeLabel, ThemeIcon, isAuthed,
 }: TemplateTreeProps) {
     const [openFolders, setOpenFolders] = useState<Set<string>>(new Set());
     const [searchQuery, setSearchQuery] = useState('');
@@ -72,6 +73,19 @@ export default function TemplateTree({
             }))
             .filter(g => g.templates.length > 0);
     }, [groups, openFolders, searchQuery]);
+
+    // 自动展开当前选中模版所在分组
+    useEffect(() => {
+        if (!activeTemplateId) return;
+        const owningGroup = groups.find(g => g.templates.some(t => t.id === activeTemplateId));
+        if (!owningGroup) return;
+        setOpenFolders(prev => {
+            if (prev.has(owningGroup.id)) return prev;
+            const next = new Set(prev);
+            next.add(owningGroup.id);
+            return next;
+        });
+    }, [activeTemplateId, groups]);
 
     // 时间戳格式化
     const formatTime = (ts: number): string => {
@@ -219,7 +233,9 @@ export default function TemplateTree({
                 {/* New group button */}
                 <button
                     onClick={onCreateFolder}
-                    className="w-full mt-4 flex items-center justify-center gap-2 py-2 border border-dashed border-slate-200 dark:border-slate-700 hover:border-blue-300 dark:hover:border-blue-500/50 hover:bg-blue-50 dark:hover:bg-blue-500/10 text-slate-400 dark:text-slate-500 hover:text-blue-600 dark:hover:text-blue-400 rounded-lg text-xs font-bold transition-all"
+                    disabled={!isAuthed}
+                    title={!isAuthed ? '登录后可新建分组' : undefined}
+                    className={`w-full mt-4 flex items-center justify-center gap-2 py-2 border border-dashed border-slate-200 dark:border-slate-700 hover:border-blue-300 dark:hover:border-blue-500/50 hover:bg-blue-50 dark:hover:bg-blue-500/10 text-slate-400 dark:text-slate-500 hover:text-blue-600 dark:hover:text-blue-400 rounded-lg text-xs font-bold transition-all ${!isAuthed ? 'opacity-50 cursor-not-allowed hover:bg-transparent hover:border-slate-200 dark:hover:border-slate-700' : ''}`}
                 >
                     <Plus size={14} /> 新建业务分组
                 </button>
@@ -246,22 +262,25 @@ export default function TemplateTree({
                         </div>
                     </div>
                 ) : (
-                    <div className="flex items-center justify-between p-1.5">
-                        <button
-                            onClick={onLogin}
-                            className="flex items-center gap-2 px-3 py-2 bg-slate-900 dark:bg-white text-white dark:text-slate-900 text-xs font-bold rounded-lg hover:bg-slate-800 dark:hover:bg-slate-100 transition-colors flex-1 justify-center"
-                        >
-                            <LogIn size={14} /> 登录
-                        </button>
-                        {ThemeIcon && (
+                    <div className="p-1.5">
+                        <div className="flex items-center justify-between">
                             <button
-                                onClick={onCycleTheme}
-                                className="ml-2 p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-400 dark:text-slate-500 transition-colors"
-                                title={themeLabel}
+                                onClick={onLogin}
+                                title="登录后可保存模板并导出 PDF"
+                                className="flex items-center gap-2 px-3 py-2 bg-slate-900 dark:bg-white text-white dark:text-slate-900 text-xs font-bold rounded-lg hover:bg-slate-800 dark:hover:bg-slate-100 transition-colors flex-1 justify-center"
                             >
-                                <ThemeIcon size={16} />
+                                <LogIn size={14} /> 使用 GitHub 登录
                             </button>
-                        )}
+                            {ThemeIcon && (
+                                <button
+                                    onClick={onCycleTheme}
+                                    className="ml-2 p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-400 dark:text-slate-500 transition-colors"
+                                    title={themeLabel}
+                                >
+                                    <ThemeIcon size={16} />
+                                </button>
+                            )}
+                        </div>
                     </div>
                 )}
             </div>
