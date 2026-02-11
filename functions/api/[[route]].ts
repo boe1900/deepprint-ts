@@ -2,24 +2,23 @@ import { Hono } from 'hono'
 import { handle } from 'hono/cloudflare-pages'
 import { createMiddleware } from 'hono/factory'
 import { convertToModelMessages, jsonSchema, stepCountIs, streamText } from 'ai'
-import { createGoogleGenerativeAI } from '@ai-sdk/google'
-import { createOpenAI } from '@ai-sdk/openai'
 import { createAuth } from '../lib/auth'
+import { resolveModelFromEnv } from '../lib/ai-provider'
 import { D1Database } from '@cloudflare/workers-types'
 
 type Bindings = {
   deepprint_auth: D1Database
-  GOOGLE_GENERATIVE_AI_API_KEY: string
+  AI_PROVIDER_TYPE?: string
+  AI_PROVIDER?: string
+  AI_API_KEY?: string
+  AI_BASE_URL?: string
+  AI_MODEL?: string
+  AI_API_MODE?: string
+  GOOGLE_GENERATIVE_AI_API_KEY?: string
   GITHUB_CLIENT_ID: string
   GITHUB_CLIENT_SECRET: string
   BETTER_AUTH_SECRET: string
   BETTER_AUTH_URL?: string
-  AI_PROVIDER?: string
-  AI_MODEL?: string
-  GOOGLE_MODEL?: string
-  GLM_API_KEY?: string
-  GLM_BASE_URL?: string
-  GLM_MODEL?: string
 }
 
 type Variables = {
@@ -54,8 +53,9 @@ const TYPST_SYSTEM_PROMPT = `你是 DeepPrint 的 Typst 模版编辑 Agent。
 4. 工具结果会返回编译结果：
    - \`ok=true\`：编译成功，可以给出简短说明并结束。
    - \`ok=false\`：必须根据 \`error\` 继续修复并再次调用 \`update_typst\`。
-5. 优先保留用户已有结构，仅修改用户要求的部分。
-6. 字段来自 \`data\` 变量，请确保代码可编译。
+5. 每次调用 \`update_typst\` 都必须同时提供完整 \`mock_data\`，且字段与模板一致。
+6. 优先保留用户已有结构，仅修改用户要求的部分。
+7. 字段来自 \`data\` 变量，请确保代码可编译。
 
 输出风格：
 - 纯咨询时，直接回答问题，不输出代码块。
@@ -105,11 +105,10 @@ type GenerateRequest = {
   context?: {
     template_id?: string
     base_typst?: string
+    base_data?: Record<string, unknown>
     intent?: 'chat' | 'edit'
     available_fonts?: string[]
     available_plugins?: Array<{ spec: string; description?: string }>
-    provider?: 'google' | 'glm'
-    model?: string
   }
 }
 
@@ -167,6 +166,47 @@ const createTemplateVersionIfChanged = async (params: {
   return versionId
 }
 
+const MAX_FULL_TYPST_CHARS = 20000
+const MAX_FULL_DATA_CHARS = 12000
+
+const trimMiddle = (input: string, keepHead: number, keepTail: number) => {
+  if (input.length <= keepHead + keepTail) return input
+  return `${input.slice(0, keepHead)}\n\n...（中间内容已省略）...\n\n${input.slice(-keepTail)}`
+}
+
+const buildTemplateContextSection = (context?: GenerateRequest['context']) => {
+  const rawTypst = typeof context?.base_typst === 'string' ? context.base_typst : ''
+  const rawData = context?.base_data ?? {}
+  const dataText = JSON.stringify(rawData, null, 2)
+
+  const typstFull = rawTypst.length > 0 && rawTypst.length <= MAX_FULL_TYPST_CHARS
+  const dataFull = dataText.length <= MAX_FULL_DATA_CHARS
+
+  const typstContent = rawTypst.length === 0
+    ? '（当前无模板代码）'
+    : typstFull
+      ? rawTypst
+      : trimMiddle(rawTypst, 9000, 9000)
+
+  const dataContent = dataFull
+    ? dataText
+    : trimMiddle(dataText, 5000, 5000)
+
+  return `模板上下文（请优先基于以下内容回答与修改）：
+- typst_context_mode=${typstFull ? 'full' : 'truncated'}
+- data_context_mode=${dataFull ? 'full' : 'truncated'}
+
+当前 Typst 模板代码：
+\`\`\`typst
+${typstContent}
+\`\`\`
+
+当前 mock_data：
+\`\`\`json
+${dataContent}
+\`\`\``
+}
+
 // AI 生成端点
 app.post('/generate', requireAuth, async (c) => {
   try {
@@ -202,10 +242,9 @@ app.post('/generate', requireAuth, async (c) => {
       ? context!.available_plugins!
       : AVAILABLE_PACKAGES.map((pkg) => ({ spec: pkg, description: '' }))
 
-    const provider = (context?.provider || c.env.AI_PROVIDER || 'google').toLowerCase()
-    const requestedModel = context?.model || c.env.AI_MODEL
-    const googleModel = requestedModel || c.env.GOOGLE_MODEL || 'gemini-flash-latest'
-    const glmModel = requestedModel || c.env.GLM_MODEL || 'glm-4.5'
+    const { providerType, model, apiMode, languageModel } = resolveModelFromEnv(c.env)
+
+    const templateContextSection = buildTemplateContextSection(context)
 
     const systemPrompt = `${TYPST_SYSTEM_PROMPT}
 
@@ -227,10 +266,15 @@ ${availablePlugins.map((pkg) => `- ${pkg.spec}${pkg.description ? `（${pkg.desc
 当前上下文：
 - template_id=${context?.template_id || 'unknown'}
 - intent=${intent}
+- provider_type=${providerType}
+- model=${model}
+- api_mode=${apiMode}
 
 规则补充：
 - 当 intent=chat：只能聊天答疑，禁止调用工具。
-- 当 intent=edit：可调用工具进行模版修改。`
+- 当 intent=edit：可调用工具进行模版修改。
+
+${templateContextSection}`
 
     const runGenerate = (model: any) => streamText({
       model,
@@ -241,24 +285,7 @@ ${availablePlugins.map((pkg) => `- ${pkg.spec}${pkg.description ? `（${pkg.desc
       stopWhen: stepCountIs(6),
     })
 
-    if (provider === 'glm') {
-      if (!c.env.GLM_API_KEY) {
-        return c.json({ error: '未配置 GLM_API_KEY，无法使用 GLM 模型' }, 500)
-      }
-      const glm = createOpenAI({
-        apiKey: c.env.GLM_API_KEY,
-        baseURL: c.env.GLM_BASE_URL || 'https://open.bigmodel.cn/api/paas/v4/',
-      })
-      return runGenerate(glm(glmModel)).toUIMessageStreamResponse()
-    } else {
-      if (!c.env.GOOGLE_GENERATIVE_AI_API_KEY) {
-        return c.json({ error: '未配置 GOOGLE_GENERATIVE_AI_API_KEY，无法使用 Google 模型' }, 500)
-      }
-      const google = createGoogleGenerativeAI({
-        apiKey: c.env.GOOGLE_GENERATIVE_AI_API_KEY,
-      })
-      return runGenerate(google(googleModel)).toUIMessageStreamResponse()
-    }
+    return runGenerate(languageModel).toUIMessageStreamResponse()
   } catch (error) {
     console.error('Generate error:', error)
     return c.json(
@@ -706,6 +733,30 @@ app.delete('/templates/:id', requireAuth, async (c) => {
     .first()
 
   if (!existing) return c.json({ error: '模版不存在' }, 404)
+
+  // 先清理模板关联数据：AI 会话消息、AI 线程、历史版本
+  const threadRows = await db
+    .prepare('SELECT id FROM ai_threads WHERE user_id = ? AND template_id = ?')
+    .bind(userId, templateId)
+    .all()
+
+  for (const row of threadRows.results) {
+    const threadId = row.id as string
+    await db
+      .prepare('DELETE FROM ai_messages WHERE thread_id = ?')
+      .bind(threadId)
+      .run()
+  }
+
+  await db
+    .prepare('DELETE FROM ai_threads WHERE user_id = ? AND template_id = ?')
+    .bind(userId, templateId)
+    .run()
+
+  await db
+    .prepare('DELETE FROM template_versions WHERE user_id = ? AND template_id = ?')
+    .bind(userId, templateId)
+    .run()
 
   await db
     .prepare('DELETE FROM templates WHERE id = ? AND user_id = ?')

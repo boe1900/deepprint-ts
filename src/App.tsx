@@ -255,6 +255,12 @@ type CompileFeedback = {
   };
 };
 
+const briefErrorText = (message: string, max = 180) => {
+  const normalized = message.replace(/\s+/g, ' ').trim();
+  if (normalized.length <= max) return normalized;
+  return `${normalized.slice(0, max)}...`;
+};
+
 const TypstPreview = forwardRef<
   TypstPreviewRef,
   { code: string; data: any; onZoomChange?: (zoom: number) => void }
@@ -582,9 +588,12 @@ const TypstPreview = forwardRef<
       >
         {/* 错误提示 */}
         {error && (
-          <div className="fixed top-16 right-4 bg-red-100 text-red-600 p-3 rounded-lg shadow-lg text-xs flex items-center gap-2 z-50 border border-red-200">
+          <div
+            className="fixed top-16 right-4 max-w-[680px] bg-red-100 text-red-600 p-3 rounded-lg shadow-lg text-xs flex items-center gap-2 z-50 border border-red-200"
+            title={error}
+          >
             <AlertCircle size={14} />
-            {error}
+            <span className="line-clamp-2">{briefErrorText(error, 260)}</span>
           </div>
         )}
 
@@ -778,7 +787,7 @@ interface ChatPanelProps {
   currentCode: string;
   currentData: Record<string, unknown>;
   initialMessages: Array<{ id?: string; role: string; parts: unknown[] }>;
-  onPersistMessages: (messages: Array<{ role: string; parts: unknown[] }>) => Promise<void>;
+  onPersistMessages: (templateId: string, messages: Array<{ role: string; parts: unknown[] }>) => Promise<void>;
   onApplyAndValidate: (nextCode: string, nextData?: Record<string, unknown>) => Promise<CompileFeedback>;
   onClose: () => void;
 }
@@ -823,7 +832,9 @@ const UpdateTypstToolCard: ToolCallMessagePartComponent<Record<string, unknown>,
           代码长度 {codeLen} 字符
         </p>
         {result?.error && (
-          <p className="mt-1 text-red-600 dark:text-red-400">{result.error}</p>
+          <p className="mt-1 text-red-600 dark:text-red-400" title={result.error}>
+            {briefErrorText(result.error)}
+          </p>
         )}
         {result?.diagnostics?.line && (
           <p className="mt-1 text-red-500 dark:text-red-400">
@@ -851,6 +862,7 @@ const ChatPanel = ({
   const [lastCompileDiagnostics, setLastCompileDiagnostics] = useState<CompileFeedback['diagnostics'] | null>(null);
   const appliedByToolInTurnRef = useRef(false);
   const latestIntentRef = useRef<'chat' | 'edit'>('chat');
+  const autoToolLoopCountRef = useRef(0);
 
   const inferIntentFromText = useCallback((text: string): 'chat' | 'edit' => {
     const normalized = text.trim().toLowerCase();
@@ -887,11 +899,11 @@ const ChatPanel = ({
         typst_code: { type: 'string', description: '完整的 Typst 代码' },
         mock_data: {
           type: 'object',
-          description: '可选，新的 mock 数据对象',
+          description: '与模板匹配的完整 mock 数据对象（必填）',
           additionalProperties: true,
         },
       },
-      required: ['typst_code'],
+      required: ['typst_code', 'mock_data'],
       additionalProperties: false,
     },
     disabled: !activeTemplateId,
@@ -905,13 +917,19 @@ const ChatPanel = ({
         setAgentStatus('error');
         return { ok: false, error: '请先在左侧选择一个模版' };
       }
-      const nextCode = typeof args.typst_code === 'string' ? args.typst_code : '';
+      const rawCode = typeof args.typst_code === 'string' ? args.typst_code : '';
+      const fenced = rawCode.match(/```typst\s*([\s\S]*?)```/i) || rawCode.match(/```[a-zA-Z0-9_-]*\s*([\s\S]*?)```/i);
+      const nextCode = (fenced?.[1] || rawCode).trim();
       const nextData = args.mock_data && typeof args.mock_data === 'object'
         ? (args.mock_data as Record<string, unknown>)
         : undefined;
       if (!nextCode.trim()) {
         setAgentStatus('error');
         return { ok: false, error: 'typst_code 不能为空' };
+      }
+      if (!nextData || Object.keys(nextData).length === 0) {
+        setAgentStatus('error');
+        return { ok: false, error: 'mock_data 不能为空，请同时返回与模板匹配的模拟数据' };
       }
       appliedByToolInTurnRef.current = true;
       setAgentStatus(hasFailedOnce ? 'repairing' : 'compiling');
@@ -920,6 +938,7 @@ const ChatPanel = ({
         setAgentStatus('success');
         setHasFailedOnce(false);
         setLastCompileDiagnostics(null);
+        autoToolLoopCountRef.current = 0;
         return compileResult;
       }
       setAgentStatus('error');
@@ -938,6 +957,9 @@ const ChatPanel = ({
       api: '/api/generate',
       prepareSendMessagesRequest: async (options) => {
         appliedByToolInTurnRef.current = false;
+        if (String(options.trigger || '').includes('submit')) {
+          autoToolLoopCountRef.current = 0;
+        }
         const lastUserText = extractLastUserText(options.messages as any[]);
         latestIntentRef.current = inferIntentFromText(lastUserText);
         return {
@@ -960,17 +982,23 @@ const ChatPanel = ({
         };
       },
     }),
-    sendAutomaticallyWhen: lastAssistantMessageIsCompleteWithToolCalls,
+    sendAutomaticallyWhen: ({ messages }) => {
+      const shouldContinue = lastAssistantMessageIsCompleteWithToolCalls({ messages: messages as any });
+      if (!shouldContinue) return false;
+      autoToolLoopCountRef.current += 1;
+      return autoToolLoopCountRef.current <= 4;
+    },
     onFinish: async ({ message, messages }) => {
       if (activeTemplateId) {
         const plainMessages = (messages || []).map((m: any) => ({
           role: String(m?.role || 'assistant'),
           parts: Array.isArray(m?.parts) ? m.parts : [],
         }));
-        await onPersistMessages(plainMessages);
+        await onPersistMessages(activeTemplateId, plainMessages);
       }
       // 兜底逻辑：模型若没有真正调用工具，但输出了代码块，自动应用到编辑器。
       if (appliedByToolInTurnRef.current || !activeTemplateId) return;
+      if (latestIntentRef.current !== 'edit') return;
 
       const textContent = (message.parts || [])
         .filter((part: any) => part?.type === 'text' && typeof part?.text === 'string')
@@ -979,9 +1007,16 @@ const ChatPanel = ({
       if (!textContent) return;
 
       const typstMatch = textContent.match(/```typst\s*([\s\S]*?)```/i);
-      const genericCodeBlockMatch = textContent.match(/```[a-zA-Z0-9_-]*\s*([\s\S]*?)```/i);
-      const nextCode = (typstMatch?.[1] || genericCodeBlockMatch?.[1] || '').trim();
+      const rawCandidate = (typstMatch?.[1] || '').trim();
+      const nextCode = rawCandidate;
       if (!nextCode) return;
+      const isLikelyTypst =
+        nextCode.includes('#set ') ||
+        nextCode.includes('#let ') ||
+        nextCode.includes('#import ') ||
+        nextCode.includes('sys.inputs') ||
+        nextCode.includes('@preview/');
+      if (!isLikelyTypst) return;
 
       setAgentStatus('compiling');
       const compileResult = await onApplyAndValidate(nextCode);
@@ -1106,10 +1141,13 @@ export default function DeepPrintStudio() {
   const [blankError, setBlankError] = useState('');
   const [returnToBlankAfterCreateFolder, setReturnToBlankAfterCreateFolder] = useState(false);
   const [chatSeedMessages, setChatSeedMessages] = useState<Array<{ id?: string; role: string; parts: unknown[] }>>([]);
+  const [chatSeedVersion, setChatSeedVersion] = useState(0);
   const [showVersionsDialog, setShowVersionsDialog] = useState(false);
   const [versions, setVersions] = useState<TemplateVersion[]>([]);
   const [isLoadingVersions, setIsLoadingVersions] = useState(false);
   const [isRestoringVersion, setIsRestoringVersion] = useState(false);
+  const selectTemplateSeqRef = useRef(0);
+  const currentTemplateIdRef = useRef('');
 
   // TypstPreview ref for zoom controls
   const previewRef = useRef<TypstPreviewRef>(null);
@@ -1147,20 +1185,32 @@ export default function DeepPrintStudio() {
       setCode(DEFAULT_CODE);
       setData(DEFAULT_DATA);
       setChatSeedMessages([]);
+      setChatSeedVersion((v) => v + 1);
     }
   }, [session, loadFolders]);
 
   const isAuthed = !!session?.user;
   const hasActiveTemplate = !!activeTemplateId;
 
+  useEffect(() => {
+    currentTemplateIdRef.current = activeTemplateId;
+  }, [activeTemplateId]);
+
   // 选择模版 → 从 API 加载详情
   const handleSelectTemplate = useCallback(async (id: string) => {
+    const seq = ++selectTemplateSeqRef.current;
+    currentTemplateIdRef.current = id;
     setActiveTemplateId(id);
+    setChatSeedMessages([]);
+    setChatSeedVersion((v) => v + 1);
     try {
       const [detail, thread] = await Promise.all([
         api.getTemplate(id),
         api.getTemplateAiThread(id),
       ]);
+      if (selectTemplateSeqRef.current !== seq || currentTemplateIdRef.current !== id) {
+        return;
+      }
       setCode(detail.content || DEFAULT_CODE);
       setData(detail.mock_data && Object.keys(detail.mock_data).length > 0 ? detail.mock_data : DEFAULT_DATA);
       setChatSeedMessages(thread.messages.map((m) => ({
@@ -1168,9 +1218,14 @@ export default function DeepPrintStudio() {
         role: m.role,
         parts: m.parts || [],
       })));
+      setChatSeedVersion((v) => v + 1);
     } catch (err) {
+      if (selectTemplateSeqRef.current !== seq || currentTemplateIdRef.current !== id) {
+        return;
+      }
       console.error('加载模版失败:', err);
       setChatSeedMessages([]);
+      setChatSeedVersion((v) => v + 1);
     }
   }, []);
 
@@ -1193,14 +1248,14 @@ export default function DeepPrintStudio() {
     }
   }, [activeTemplateId, code, data]);
 
-  const handlePersistAiMessages = useCallback(async (messages: Array<{ role: string; parts: unknown[] }>) => {
-    if (!activeTemplateId) return;
+  const handlePersistAiMessages = useCallback(async (templateId: string, messages: Array<{ role: string; parts: unknown[] }>) => {
+    if (!templateId) return;
     try {
-      await api.putTemplateAiThreadMessages(activeTemplateId, messages.slice(-200));
+      await api.putTemplateAiThreadMessages(templateId, messages.slice(-200));
     } catch (err) {
       console.error('保存 AI 会话失败:', err);
     }
-  }, [activeTemplateId]);
+  }, []);
 
   const loadVersions = useCallback(async () => {
     if (!activeTemplateId) return;
@@ -1477,6 +1532,7 @@ export default function DeepPrintStudio() {
           setCode(DEFAULT_CODE);
           setData(DEFAULT_DATA);
           setChatSeedMessages([]);
+          setChatSeedVersion((v) => v + 1);
         }
       }
       await loadFolders();
@@ -1896,7 +1952,7 @@ export default function DeepPrintStudio() {
       {/* ─── 右侧栏：AI 对话 ─── */}
       <div className={showChat ? '' : 'hidden'}>
         <ChatPanel
-          key={activeTemplateId || 'no-template'}
+          key={`${activeTemplateId || 'no-template'}:${chatSeedVersion}`}
           activeTemplateId={activeTemplateId}
           currentCode={code}
           currentData={data}

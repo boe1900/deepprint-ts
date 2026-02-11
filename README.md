@@ -6,37 +6,34 @@
 - 选择哪个 provider/model，就只调用哪个。
 - 不会自动回退到其他模型。
 
-## 支持的 Provider
+## 支持的 Provider Type
 
 - `google`（Gemini）
-- `glm`（通过 OpenAI-compatible 接口接入）
+- `openai`（任何 OpenAI-compatible 平台，如 GLM / DeepSeek / Ark Coding Plan）
+- `anthropic`（预留类型，当前构建未启用 SDK 适配）
 
 ## 环境变量
 
-通用：
-- `AI_PROVIDER`：`google` 或 `glm`
-- `AI_MODEL`：可选，通用模型名（优先级最高）
+通用（推荐统一使用这一套）：
+- `AI_PROVIDER_TYPE`：`google | openai | anthropic`
+- `AI_API_KEY`：`google/openai` 必填
+- `AI_BASE_URL`：`openai` 必填（例如 GLM/DeepSeek/Ark 的兼容地址）
+- `AI_MODEL`：可选，默认 `google: gemini-flash-latest`，`openai: gpt-4o-mini`
+- `AI_API_MODE`：仅 `openai` 生效，`chat | responses`，默认 `chat`
 
-Google：
-- `GOOGLE_GENERATIVE_AI_API_KEY`：必填（当 `AI_PROVIDER=google`）
-- `GOOGLE_MODEL`：可选，默认 `gemini-flash-latest`
-
-GLM：
-- `GLM_API_KEY`：必填（当 `AI_PROVIDER=glm`）
-- `GLM_BASE_URL`：可选，默认 `https://open.bigmodel.cn/api/paas/v4/`
-- `GLM_MODEL`：可选，默认 `glm-4.5`（建议显式配置为你要的版本，如 `glm-4.7`）
+兼容过渡：
+- `AI_PROVIDER` 可作为 `AI_PROVIDER_TYPE` 的别名（仅过渡期建议）
+- `GOOGLE_GENERATIVE_AI_API_KEY` 可作为 `google` 的备用 key 来源
 
 ## 模型选择优先级
 
 后端实际使用模型时，优先级如下：
-1. 请求体 `context.model`
-2. `AI_MODEL`
-3. Provider 专属模型变量（`GOOGLE_MODEL` 或 `GLM_MODEL`）
-4. 默认值（Google: `gemini-flash-latest`，GLM: `glm-4.5`）
+1. `AI_MODEL`
+2. 默认值（`google: gemini-flash-latest`，`openai: gpt-4o-mini`）
 
 Provider 选择优先级：
-1. 请求体 `context.provider`
-2. `AI_PROVIDER`
+1. `AI_PROVIDER_TYPE`
+2. `AI_PROVIDER`（兼容别名）
 3. 默认 `google`
 
 ## 示例配置
@@ -44,25 +41,36 @@ Provider 选择优先级：
 Google：
 
 ```env
-AI_PROVIDER=google
-GOOGLE_GENERATIVE_AI_API_KEY=your_google_key
-GOOGLE_MODEL=gemini-flash-latest
+AI_PROVIDER_TYPE=google
+AI_API_KEY=your_google_key
+AI_MODEL=gemini-flash-latest
 ```
 
-GLM（例如 4.7）：
+GLM（OpenAI-compatible）：
 
 ```env
-AI_PROVIDER=glm
-GLM_API_KEY=your_glm_key
-GLM_BASE_URL=https://open.bigmodel.cn/api/paas/v4/
-GLM_MODEL=glm-4.7
+AI_PROVIDER_TYPE=openai
+AI_API_KEY=your_glm_key
+AI_BASE_URL=https://open.bigmodel.cn/api/paas/v4/
+AI_MODEL=glm-4.7
+AI_API_MODE=chat
+```
+
+DeepSeek（OpenAI-compatible）：
+
+```env
+AI_PROVIDER_TYPE=openai
+AI_API_KEY=your_deepseek_key
+AI_BASE_URL=https://api.deepseek.com/v1
+AI_MODEL=deepseek-chat
+AI_API_MODE=chat
 ```
 
 ## 常见问题
 
-- 报错“未配置 GLM_API_KEY”：说明当前选择了 GLM，但没有配置 `GLM_API_KEY`。
-- 报错“未配置 GOOGLE_GENERATIVE_AI_API_KEY”：说明当前选择了 Google，但没有配置 Google Key。
-- 想临时切模型：改 `AI_PROVIDER` 和对应模型变量，重启服务即可。
+- 报错“未配置 AI_API_KEY”：说明当前 provider 需要统一 key 变量。
+- 报错“未配置 AI_BASE_URL”：说明当前 `AI_PROVIDER_TYPE=openai` 但缺少兼容接口地址。
+- 想临时切模型：改 `AI_PROVIDER_TYPE / AI_BASE_URL / AI_MODEL`，重启服务即可。
 
 ## AI 会话与版本回滚（MVP）
 
