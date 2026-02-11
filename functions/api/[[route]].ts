@@ -1,8 +1,9 @@
 import { Hono } from 'hono'
 import { handle } from 'hono/cloudflare-pages'
 import { createMiddleware } from 'hono/factory'
-import { streamText } from 'ai'
+import { convertToModelMessages, jsonSchema, stepCountIs, streamText } from 'ai'
 import { createGoogleGenerativeAI } from '@ai-sdk/google'
+import { createOpenAI } from '@ai-sdk/openai'
 import { createAuth } from '../lib/auth'
 import { D1Database } from '@cloudflare/workers-types'
 
@@ -13,6 +14,12 @@ type Bindings = {
   GITHUB_CLIENT_SECRET: string
   BETTER_AUTH_SECRET: string
   BETTER_AUTH_URL?: string
+  AI_PROVIDER?: string
+  AI_MODEL?: string
+  GOOGLE_MODEL?: string
+  GLM_API_KEY?: string
+  GLM_BASE_URL?: string
+  GLM_MODEL?: string
 }
 
 type Variables = {
@@ -38,89 +45,220 @@ app.on(['GET', 'POST'], '/auth/*', (c) => {
   return auth.handler(c.req.raw)
 })
 
-const TYPST_SYSTEM_PROMPT = `你是一个 Typst 排版专家。请根据用户的需求生成 Typst 代码。
+const TYPST_SYSTEM_PROMPT = `你是 DeepPrint 的 Typst 模版编辑 Agent。
 
-## 重要规则：
-1. **必须使用 Markdown 代码块格式**：所有 Typst 代码必须包裹在 \`\`\`typst ... \`\`\` 代码块中
-2. 数据通过 \`data\` 变量注入（已预定义），直接使用 \`data.xxx\` 访问
-3. 使用中文注释解释关键部分
-4. 遵循 Typst 最佳实践，使用 #set 和 #show 规则定义样式
-5. 对于小票/收据，使用 #set page(width: 80mm, height: auto) 设置页面尺寸
-6. 对于 A4 文档，使用 #set page(paper: "a4")
+工作方式：
+1. 只有在用户明确要求“修改/生成/应用模版”时，才调用工具 \`update_typst\`。
+2. 当不需要修改时，只进行自然中文对话，不能调用工具。
+3. 每次修改都提交完整 Typst 代码。
+4. 工具结果会返回编译结果：
+   - \`ok=true\`：编译成功，可以给出简短说明并结束。
+   - \`ok=false\`：必须根据 \`error\` 继续修复并再次调用 \`update_typst\`。
+5. 优先保留用户已有结构，仅修改用户要求的部分。
+6. 字段来自 \`data\` 变量，请确保代码可编译。
 
-## 输出格式（必须遵守）：
-\`\`\`typst
-// 你的 Typst 代码在这里
-\`\`\`
+输出风格：
+- 纯咨询时，直接回答问题，不输出代码块。
+- 修改场景下，先执行工具，再用一句中文解释本次变更。
+- 不要让用户手动复制代码。`
 
-## 示例模板（收据）：
-\`\`\`typst
-// 页面设置：80mm 热敏小票
-#set page(width: 80mm, height: auto, margin: 5mm)
-#set text(font: ("Noto Sans SC", "Arial"), size: 10pt)
+const TYPST_QUICK_RULES = [
+  '每次输出完整可编译 Typst 代码，不要省略 import / #set / #let 依赖。',
+  '不要编造函数参数；不确定参数时，优先采用更保守写法。',
+  '先复用已有变量名和结构，避免大范围重写。',
+  '使用 data 时优先 data.at("key", default: "...") 兜底，避免缺字段报错。',
+  '新增函数调用时，参数名和值保持简洁，避免传入未知参数。',
+  '二维码优先使用 tiaoma 的 qrcode，且保留白底与静区。',
+  '在网格/表格布局中，列数和内容数量保持一致。',
+  '字符串插值和引号必须成对闭合。',
+  '修改后若工具返回编译错误，必须基于错误继续修复。',
+  '非修改场景只答疑，不输出代码块。',
+];
 
-// 店铺名称
-#align(center)[
-  #text(size: 14pt, weight: "bold")[#data.store_name]
+const AVAILABLE_FONTS = [
+  'Noto Sans SC',
+  'Noto Serif SC',
+  'Libertinus Sans',
+  'Libertinus Serif',
+  'DejaVu Sans Mono',
+  'New Computer Modern Math',
+  'Noto Emoji',
 ]
 
-#line(length: 100%, stroke: 0.5pt)
-
-// 商品列表
-#for item in data.items [
-  #grid(
-    columns: (1fr, auto),
-    [#item.name],
-    [¥#item.price]
-  )
+const AVAILABLE_PACKAGES = [
+  '@preview/tiaoma:0.3.0',
 ]
-
-#line(length: 100%, stroke: 0.5pt)
-
-// 合计
-#align(right)[
-  #text(weight: "bold")[合计: ¥#data.total]
-]
-\`\`\`
-
-现在，请根据用户的需求生成 Typst 代码。记住：**必须使用 \`\`\`typst 代码块包裹输出**。`
 
 // 健康检查端点
 app.get('/health', (c) => {
   return c.json({ status: 'ok', timestamp: new Date().toISOString() })
 })
 
+type ClientToolSchema = {
+  description?: string
+  parameters?: unknown
+}
+
+type GenerateRequest = {
+  messages: Array<Omit<any, 'id'>>
+  tools?: Record<string, ClientToolSchema>
+  context?: {
+    template_id?: string
+    base_typst?: string
+    intent?: 'chat' | 'edit'
+    available_fonts?: string[]
+    available_plugins?: Array<{ spec: string; description?: string }>
+    provider?: 'google' | 'glm'
+    model?: string
+  }
+}
+
+type TemplateRow = {
+  id: string
+  folder_id: string
+  user_id: string
+  name: string
+  content: string
+  mock_data: string
+  status: string
+  updated_at: number
+}
+
+const parseMockData = (raw: unknown): Record<string, unknown> => {
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+    return raw as Record<string, unknown>
+  }
+  if (typeof raw !== 'string') return {}
+  try {
+    const parsed = JSON.parse(raw)
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : {}
+  } catch {
+    return {}
+  }
+}
+
+const createTemplateVersionIfChanged = async (params: {
+  db: D1Database
+  userId: string
+  templateId: string
+  content: string
+  mockDataString: string
+  source: 'ai' | 'manual' | 'rollback'
+  summary?: string
+}) => {
+  const { db, userId, templateId, content, mockDataString, source, summary } = params
+  const latest = await db
+    .prepare('SELECT content, mock_data FROM template_versions WHERE user_id = ? AND template_id = ? ORDER BY created_at DESC LIMIT 1')
+    .bind(userId, templateId)
+    .first<{ content: string; mock_data: string }>()
+
+  if (latest && latest.content === content && latest.mock_data === mockDataString) {
+    return null
+  }
+
+  const versionId = crypto.randomUUID()
+  await db
+    .prepare('INSERT INTO template_versions (id, user_id, template_id, content, mock_data, source, summary) VALUES (?, ?, ?, ?, ?, ?, ?)')
+    .bind(versionId, userId, templateId, content, mockDataString, source, (summary || '').trim())
+    .run()
+
+  return versionId
+}
+
 // AI 生成端点
 app.post('/generate', requireAuth, async (c) => {
   try {
+    const { messages, tools, context } = await c.req.json<GenerateRequest>()
+    if (!messages || !Array.isArray(messages)) {
+      return c.json({ error: 'messages 参数不合法' }, 400)
+    }
 
-    const { messages } = await c.req.json()
+    const normalizedTools = Object.fromEntries(
+      Object.entries(tools || {}).map(([name, tool]) => [
+        name,
+        {
+          description: tool.description,
+          inputSchema: jsonSchema((tool.parameters || {
+            type: 'object',
+            additionalProperties: true,
+          }) as Record<string, unknown>),
+        },
+      ]),
+    )
 
-    const google = createGoogleGenerativeAI({
-      apiKey: c.env.GOOGLE_GENERATIVE_AI_API_KEY,
+    const modelMessages = await convertToModelMessages(messages, {
+      tools: normalizedTools,
+      ignoreIncompleteToolCalls: true,
     })
 
-    // 将 UI 消息 (parts 格式) 转换为模型消息格式 (content 格式)
-    const modelMessages = messages.map((msg: { role: string; parts?: { type: string; text: string }[]; content?: string }) => {
-      // 从 parts 数组提取文本内容
-      const content = msg.parts
-        ?.filter(part => part.type === 'text')
-        .map(part => part.text)
-        .join('') || msg.content || ''
+    const intent = context?.intent === 'edit' ? 'edit' : 'chat'
+    const toolChoice: 'auto' | 'none' = intent === 'edit' ? 'auto' : 'none'
+    const availableFonts = Array.isArray(context?.available_fonts) && context!.available_fonts!.length > 0
+      ? context!.available_fonts!
+      : AVAILABLE_FONTS
+    const availablePlugins = Array.isArray(context?.available_plugins) && context!.available_plugins!.length > 0
+      ? context!.available_plugins!
+      : AVAILABLE_PACKAGES.map((pkg) => ({ spec: pkg, description: '' }))
 
-      return {
-        role: msg.role as 'user' | 'assistant',
-        content,
-      }
-    })
+    const provider = (context?.provider || c.env.AI_PROVIDER || 'google').toLowerCase()
+    const requestedModel = context?.model || c.env.AI_MODEL
+    const googleModel = requestedModel || c.env.GOOGLE_MODEL || 'gemini-flash-latest'
+    const glmModel = requestedModel || c.env.GLM_MODEL || 'glm-4.5'
 
-    const result = streamText({
-      model: google('gemini-flash-latest'),
-      system: TYPST_SYSTEM_PROMPT,
+    const systemPrompt = `${TYPST_SYSTEM_PROMPT}
+
+高频规则（只列最易错点）：
+${TYPST_QUICK_RULES.map((rule, idx) => `${idx + 1}. ${rule}`).join('\n')}
+
+当前可用字体（仅可使用这些字体）：
+${availableFonts.map((font) => `- ${font}`).join('\n')}
+
+当前可用插件（仅可使用这些插件）：
+${availablePlugins.map((pkg) => `- ${pkg.spec}${pkg.description ? `（${pkg.description}）` : ''}`).join('\n')}
+
+约束：
+1. 不要使用上面清单之外的字体和插件。
+2. 中文场景优先使用 "Noto Sans SC" 或 "Noto Serif SC"。
+3. 需要条码时优先使用 "@preview/tiaoma:0.3.0"。
+4. 工具错误中若包含 line/column/snippet，优先围绕该位置最小改动修复。
+
+当前上下文：
+- template_id=${context?.template_id || 'unknown'}
+- intent=${intent}
+
+规则补充：
+- 当 intent=chat：只能聊天答疑，禁止调用工具。
+- 当 intent=edit：可调用工具进行模版修改。`
+
+    const runGenerate = (model: any) => streamText({
+      model,
+      system: systemPrompt,
       messages: modelMessages,
+      tools: normalizedTools,
+      toolChoice,
+      stopWhen: stepCountIs(6),
     })
 
-    return result.toUIMessageStreamResponse()
+    if (provider === 'glm') {
+      if (!c.env.GLM_API_KEY) {
+        return c.json({ error: '未配置 GLM_API_KEY，无法使用 GLM 模型' }, 500)
+      }
+      const glm = createOpenAI({
+        apiKey: c.env.GLM_API_KEY,
+        baseURL: c.env.GLM_BASE_URL || 'https://open.bigmodel.cn/api/paas/v4/',
+      })
+      return runGenerate(glm(glmModel)).toUIMessageStreamResponse()
+    } else {
+      if (!c.env.GOOGLE_GENERATIVE_AI_API_KEY) {
+        return c.json({ error: '未配置 GOOGLE_GENERATIVE_AI_API_KEY，无法使用 Google 模型' }, 500)
+      }
+      const google = createGoogleGenerativeAI({
+        apiKey: c.env.GOOGLE_GENERATIVE_AI_API_KEY,
+      })
+      return runGenerate(google(googleModel)).toUIMessageStreamResponse()
+    }
   } catch (error) {
     console.error('Generate error:', error)
     return c.json(
@@ -303,6 +441,185 @@ app.get('/templates/:id', requireAuth, async (c) => {
   return c.json({ ...result, mock_data: mockData })
 })
 
+// GET /templates/:id/ai-thread — 获取模板维度会话
+app.get('/templates/:id/ai-thread', requireAuth, async (c) => {
+  const userId = (c.get('session') as any).user.id
+  const templateId = c.req.param('id')
+  const db = c.env.deepprint_auth
+
+  const template = await db
+    .prepare('SELECT id FROM templates WHERE id = ? AND user_id = ?')
+    .bind(templateId, userId)
+    .first()
+  if (!template) return c.json({ error: '模版不存在' }, 404)
+
+  let thread = await db
+    .prepare('SELECT id, title, created_at, updated_at FROM ai_threads WHERE user_id = ? AND template_id = ? LIMIT 1')
+    .bind(userId, templateId)
+    .first<{ id: string; title: string; created_at: number; updated_at: number }>()
+
+  if (!thread) {
+    const threadId = crypto.randomUUID()
+    await db
+      .prepare('INSERT INTO ai_threads (id, user_id, template_id, title) VALUES (?, ?, ?, ?)')
+      .bind(threadId, userId, templateId, '模板会话')
+      .run()
+    thread = {
+      id: threadId,
+      title: '模板会话',
+      created_at: Math.floor(Date.now() / 1000),
+      updated_at: Math.floor(Date.now() / 1000),
+    }
+  }
+
+  const messagesRaw = await db
+    .prepare('SELECT id, role, parts_json, created_at FROM ai_messages WHERE thread_id = ? ORDER BY created_at ASC')
+    .bind(thread.id)
+    .all()
+
+  const messages = messagesRaw.results.map((item: any) => {
+    let parts: unknown[] = []
+    try {
+      const parsed = JSON.parse(item.parts_json || '[]')
+      parts = Array.isArray(parsed) ? parsed : []
+    } catch {
+      parts = []
+    }
+    return {
+      id: item.id as string,
+      role: item.role as string,
+      parts,
+      created_at: item.created_at as number,
+    }
+  })
+
+  return c.json({
+    thread: {
+      id: thread.id,
+      title: thread.title,
+      template_id: templateId,
+      created_at: thread.created_at,
+      updated_at: thread.updated_at,
+    },
+    messages,
+  })
+})
+
+// PUT /templates/:id/ai-thread/messages — 覆盖保存模板会话消息
+app.put('/templates/:id/ai-thread/messages', requireAuth, async (c) => {
+  const userId = (c.get('session') as any).user.id
+  const templateId = c.req.param('id')
+  const db = c.env.deepprint_auth
+  const body = await c.req.json<{ messages?: Array<{ role: string; parts?: unknown[] }> }>()
+  const messages = Array.isArray(body.messages) ? body.messages : []
+
+  const template = await db
+    .prepare('SELECT id FROM templates WHERE id = ? AND user_id = ?')
+    .bind(templateId, userId)
+    .first()
+  if (!template) return c.json({ error: '模版不存在' }, 404)
+
+  if (messages.length > 200) {
+    return c.json({ error: '会话消息过多，最多保存 200 条' }, 400)
+  }
+
+  let thread = await db
+    .prepare('SELECT id FROM ai_threads WHERE user_id = ? AND template_id = ? LIMIT 1')
+    .bind(userId, templateId)
+    .first<{ id: string }>()
+
+  if (!thread) {
+    const threadId = crypto.randomUUID()
+    await db
+      .prepare('INSERT INTO ai_threads (id, user_id, template_id, title) VALUES (?, ?, ?, ?)')
+      .bind(threadId, userId, templateId, '模板会话')
+      .run()
+    thread = { id: threadId }
+  }
+
+  await db.prepare('DELETE FROM ai_messages WHERE thread_id = ?').bind(thread.id).run()
+  for (const message of messages) {
+    const role = typeof message.role === 'string' ? message.role : 'assistant'
+    const parts = Array.isArray(message.parts) ? message.parts : []
+    await db
+      .prepare('INSERT INTO ai_messages (id, thread_id, role, parts_json) VALUES (?, ?, ?, ?)')
+      .bind(crypto.randomUUID(), thread.id, role, JSON.stringify(parts))
+      .run()
+  }
+
+  await db
+    .prepare('UPDATE ai_threads SET updated_at = ? WHERE id = ?')
+    .bind(Math.floor(Date.now() / 1000), thread.id)
+    .run()
+
+  return c.json({ success: true })
+})
+
+// GET /templates/:id/versions — 获取模板历史版本
+app.get('/templates/:id/versions', requireAuth, async (c) => {
+  const userId = (c.get('session') as any).user.id
+  const templateId = c.req.param('id')
+  const db = c.env.deepprint_auth
+
+  const limitRaw = Number(c.req.query('limit') || '20')
+  const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(100, limitRaw)) : 20
+
+  const template = await db
+    .prepare('SELECT id FROM templates WHERE id = ? AND user_id = ?')
+    .bind(templateId, userId)
+    .first()
+  if (!template) return c.json({ error: '模版不存在' }, 404)
+
+  const versions = await db
+    .prepare('SELECT id, source, summary, created_at FROM template_versions WHERE user_id = ? AND template_id = ? ORDER BY created_at DESC LIMIT ?')
+    .bind(userId, templateId, limit)
+    .all()
+
+  return c.json({ versions: versions.results })
+})
+
+// POST /templates/:id/versions/:versionId/restore — 回滚到某版本（并创建 rollback 快照）
+app.post('/templates/:id/versions/:versionId/restore', requireAuth, async (c) => {
+  const userId = (c.get('session') as any).user.id
+  const templateId = c.req.param('id')
+  const versionId = c.req.param('versionId')
+  const db = c.env.deepprint_auth
+
+  const template = await db
+    .prepare('SELECT id FROM templates WHERE id = ? AND user_id = ?')
+    .bind(templateId, userId)
+    .first()
+  if (!template) return c.json({ error: '模版不存在' }, 404)
+
+  const targetVersion = await db
+    .prepare('SELECT id, content, mock_data FROM template_versions WHERE id = ? AND user_id = ? AND template_id = ?')
+    .bind(versionId, userId, templateId)
+    .first<{ id: string; content: string; mock_data: string }>()
+  if (!targetVersion) return c.json({ error: '版本不存在' }, 404)
+
+  const now = Math.floor(Date.now() / 1000)
+  await db
+    .prepare('UPDATE templates SET content = ?, mock_data = ?, updated_at = ? WHERE id = ? AND user_id = ?')
+    .bind(targetVersion.content, targetVersion.mock_data, now, templateId, userId)
+    .run()
+
+  await createTemplateVersionIfChanged({
+    db,
+    userId,
+    templateId,
+    content: targetVersion.content,
+    mockDataString: targetVersion.mock_data,
+    source: 'rollback',
+    summary: `回滚到版本 ${versionId}`,
+  })
+
+  return c.json({
+    success: true,
+    content: targetVersion.content,
+    mock_data: parseMockData(targetVersion.mock_data),
+  })
+})
+
 // PUT /templates/:id — 更新模版
 app.put('/templates/:id', requireAuth, async (c) => {
   const userId = (c.get('session') as any).user.id
@@ -312,20 +629,28 @@ app.put('/templates/:id', requireAuth, async (c) => {
     content?: string
     mock_data?: Record<string, unknown>
     status?: string
+    update_source?: 'ai' | 'manual' | 'rollback'
+    update_summary?: string
   }>()
   const db = c.env.deepprint_auth
 
   // 检查模版存在且属于当前用户
   const existing = await db
-    .prepare('SELECT id, folder_id FROM templates WHERE id = ? AND user_id = ?')
+    .prepare('SELECT id, folder_id, content, mock_data FROM templates WHERE id = ? AND user_id = ?')
     .bind(templateId, userId)
-    .first()
+    .first<TemplateRow>()
 
   if (!existing) return c.json({ error: '模版不存在' }, 404)
 
   // 动态构建 SET 子句
   const sets: string[] = []
   const values: (string | number)[] = []
+  const nextContent = body.content !== undefined ? body.content : existing.content
+  const nextMockDataString = body.mock_data !== undefined
+    ? JSON.stringify(body.mock_data)
+    : (existing.mock_data || '{}')
+  const contentOrDataChanged =
+    nextContent !== existing.content || nextMockDataString !== (existing.mock_data || '{}')
 
   if (body.name !== undefined) {
     const trimmedName = body.name.trim()
@@ -339,7 +664,7 @@ app.put('/templates/:id', requireAuth, async (c) => {
     values.push(trimmedName)
   }
   if (body.content !== undefined) { sets.push('content = ?'); values.push(body.content) }
-  if (body.mock_data !== undefined) { sets.push('mock_data = ?'); values.push(JSON.stringify(body.mock_data)) }
+  if (body.mock_data !== undefined) { sets.push('mock_data = ?'); values.push(nextMockDataString) }
   if (body.status !== undefined) { sets.push('status = ?'); values.push(body.status) }
 
   if (sets.length === 0) return c.json({ error: '没有需要更新的字段' }, 400)
@@ -353,6 +678,18 @@ app.put('/templates/:id', requireAuth, async (c) => {
     .prepare(`UPDATE templates SET ${sets.join(', ')} WHERE id = ? AND user_id = ?`)
     .bind(...values)
     .run()
+
+  if (contentOrDataChanged) {
+    await createTemplateVersionIfChanged({
+      db,
+      userId,
+      templateId,
+      content: nextContent,
+      mockDataString: nextMockDataString,
+      source: body.update_source || 'manual',
+      summary: body.update_summary || '',
+    })
+  }
 
   return c.json({ success: true })
 })

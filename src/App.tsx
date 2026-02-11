@@ -1,8 +1,9 @@
-import { useState, useEffect, useRef, useCallback, forwardRef, useImperativeHandle } from 'react';
-import { api, ApiError, type FolderWithTemplates } from '@/lib/api-client';
+import { useState, useEffect, useRef, useCallback, useMemo, forwardRef, useImperativeHandle } from 'react';
+import { api, ApiError, type FolderWithTemplates, type TemplateVersion } from '@/lib/api-client';
 import { TypstDocument } from '@myriaddreamin/typst.react';
 import { type TypstCompiler, createTypstCompiler, preloadRemoteFonts, MemoryAccessModel, initOptions } from '@myriaddreamin/typst.ts';
-import { DefaultChatTransport } from 'ai';
+import { AssistantChatTransport, useChatRuntime } from '@assistant-ui/react-ai-sdk';
+import { lastAssistantMessageIsCompleteWithToolCalls } from 'ai';
 import Editor, { type OnMount } from '@monaco-editor/react';
 import * as monaco from 'monaco-editor';
 import {
@@ -17,19 +18,26 @@ import { useTheme, THEMES } from './hooks/useTheme';
 
 // Assistant UI Integration
 import { Thread } from '@/components/assistant-ui/thread';
-import { useChatRuntime } from '@assistant-ui/react-ai-sdk';
-import { AssistantRuntimeProvider } from '@assistant-ui/react';
+import { AssistantRuntimeProvider, makeAssistantTool, type ToolCallMessagePartComponent } from '@assistant-ui/react';
 import { TooltipProvider } from '@/components/ui/tooltip';
 
 // Auth
 import { authClient } from '@/lib/auth-client';
 import { LoginDialog } from '@/components/auth/login-dialog';
+import typstPackages from '../typst-packages.json';
 
 // New layout components
 import TemplateTree from '@/components/TemplateTree';
 import DataEditorDialog from '@/components/DataEditorDialog';
 import { InputDialog } from '@/components/InputDialog';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 
 // =============================================================================
 // 🌌 Typst Universe 插件预加载 (编译时静态分析)
@@ -229,7 +237,23 @@ export interface TypstPreviewRef {
   resetZoom: () => void;
   fitToWidth: () => void;
   exportPdf: () => Promise<Uint8Array | null>;
+  compileAndGetError: (
+    nextCode?: string,
+    nextData?: Record<string, unknown>,
+    suppressUiError?: boolean,
+  ) => Promise<CompileFeedback>;
 }
+
+type CompileFeedback = {
+  ok: boolean;
+  error?: string;
+  diagnostics?: {
+    message: string;
+    line?: number;
+    column?: number;
+    snippet?: string;
+  };
+};
 
 const TypstPreview = forwardRef<
   TypstPreviewRef,
@@ -272,11 +296,46 @@ const TypstPreview = forwardRef<
     }
   }, [zoom]);
 
+  const buildFullCodeWith = useCallback((nextCode: string, nextData: Record<string, unknown>) => {
+    const dataCode = `#let data = json.decode("${JSON.stringify(nextData).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}")\n`;
+    return dataCode + nextCode;
+  }, []);
+
   const buildFullCode = useCallback(() => {
-    // 使用 Typst 内置的 json.decode 解析 JSON 字符串，比手动拼接字符串更健壮
-    const dataCode = `#let data = json.decode("${JSON.stringify(data).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}")\n`;
-    return dataCode + code;
-  }, [code, data]);
+    return buildFullCodeWith(code, data);
+  }, [buildFullCodeWith, code, data]);
+
+  const extractDiagnosticMeta = useCallback((rawDiagnostic: unknown): { message: string; line?: number; column?: number } => {
+    const fallback = { message: '编译失败', line: undefined, column: undefined };
+    if (typeof rawDiagnostic === 'string') {
+      const lineColumnMatch = rawDiagnostic.match(/line\s+(\d+)(?:[:\s,]+column\s+(\d+))?/i);
+      return {
+        message: rawDiagnostic,
+        line: lineColumnMatch?.[1] ? Number(lineColumnMatch[1]) : undefined,
+        column: lineColumnMatch?.[2] ? Number(lineColumnMatch[2]) : undefined,
+      };
+    }
+    if (!rawDiagnostic || typeof rawDiagnostic !== 'object') return fallback;
+    const diagnostic = rawDiagnostic as Record<string, unknown>;
+    const message = typeof diagnostic.message === 'string'
+      ? diagnostic.message
+      : JSON.stringify(diagnostic);
+    const line = typeof diagnostic.line === 'number'
+      ? diagnostic.line
+      : typeof (diagnostic.range as any)?.start?.line === 'number'
+        ? Number((diagnostic.range as any).start.line)
+        : typeof (diagnostic.span as any)?.start?.line === 'number'
+          ? Number((diagnostic.span as any).start.line)
+          : undefined;
+    const column = typeof diagnostic.column === 'number'
+      ? diagnostic.column
+      : typeof (diagnostic.range as any)?.start?.column === 'number'
+        ? Number((diagnostic.range as any).start.column)
+        : typeof (diagnostic.span as any)?.start?.column === 'number'
+          ? Number((diagnostic.span as any).start.column)
+          : undefined;
+    return { message, line, column };
+  }, []);
 
   const exportPdf = useCallback(async (): Promise<Uint8Array | null> => {
     if (!compiler || !code) return null;
@@ -304,6 +363,55 @@ const TypstPreview = forwardRef<
     }
   }, [buildFullCode, code, compiler]);
 
+  const compileAndGetError = useCallback(async (
+    nextCode?: string,
+    nextData?: Record<string, unknown>,
+    suppressUiError = false,
+  ): Promise<CompileFeedback> => {
+    if (!compiler) return { ok: false, error: '编译器未就绪' };
+    try {
+      const mainFilePath = '/main.typ';
+      const sourceCode = nextCode ?? code;
+      const fullCode = buildFullCodeWith(sourceCode, nextData ?? data);
+      compiler.addSource(mainFilePath, fullCode);
+      const compileResult = await compiler.compile({ mainFilePath });
+      const artifactData = compileResult.result;
+      if (artifactData && artifactData.length > 0) {
+        setArtifact(artifactData);
+        setError(null);
+        return { ok: true };
+      }
+      const firstError = compileResult.diagnostics?.[0];
+      const diagnosticMeta = extractDiagnosticMeta(firstError);
+      const adjustedLine = typeof diagnosticMeta.line === 'number'
+        ? Math.max(1, diagnosticMeta.line - 1) // 第一行是注入的 #let data
+        : undefined;
+      const snippet = typeof adjustedLine === 'number'
+        ? sourceCode.split('\n')[adjustedLine - 1]?.trim() || undefined
+        : undefined;
+      const errorMsg = diagnosticMeta.message || '编译失败';
+      if (!suppressUiError) {
+        setError(`编译错误: ${errorMsg}`);
+      }
+      return {
+        ok: false,
+        error: `编译错误: ${errorMsg}`,
+        diagnostics: {
+          message: errorMsg,
+          line: adjustedLine,
+          column: diagnosticMeta.column,
+          snippet,
+        },
+      };
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : '编译失败';
+      if (!suppressUiError) {
+        setError(errorMsg);
+      }
+      return { ok: false, error: errorMsg };
+    }
+  }, [buildFullCodeWith, code, compiler, data, extractDiagnosticMeta]);
+
   useImperativeHandle(ref, () => ({
     zoom,
     zoomIn,
@@ -311,7 +419,8 @@ const TypstPreview = forwardRef<
     resetZoom,
     fitToWidth,
     exportPdf,
-  }), [zoom, zoomIn, zoomOut, resetZoom, fitToWidth, exportPdf]);
+    compileAndGetError,
+  }), [zoom, zoomIn, zoomOut, resetZoom, fitToWidth, exportPdf, compileAndGetError]);
 
   useEffect(() => {
     onZoomChange?.(zoom);
@@ -645,38 +754,245 @@ const DEFAULT_DATA = {
   ]
 };
 
+const AVAILABLE_FONT_FAMILIES = [
+  'Noto Sans SC',
+  'Noto Serif SC',
+  'Libertinus Sans',
+  'Libertinus Serif',
+  'DejaVu Sans Mono',
+  'New Computer Modern Math',
+  'Noto Emoji',
+];
+
+const AVAILABLE_PLUGIN_SPECS = (typstPackages as Array<{ name: string; version: string; description?: string }>)
+  .map((pkg) => ({
+    spec: `@preview/${pkg.name}:${pkg.version}`,
+    description: pkg.description || '',
+  }));
+
 // =============================================================================
 // 🤖 ChatPanel - AI 对话面板 (使用 assistant-ui)
 // =============================================================================
 interface ChatPanelProps {
-  onCodeExtracted: (code: string) => void;
+  activeTemplateId: string;
+  currentCode: string;
+  currentData: Record<string, unknown>;
+  initialMessages: Array<{ id?: string; role: string; parts: unknown[] }>;
+  onPersistMessages: (messages: Array<{ role: string; parts: unknown[] }>) => Promise<void>;
+  onApplyAndValidate: (nextCode: string, nextData?: Record<string, unknown>) => Promise<CompileFeedback>;
   onClose: () => void;
 }
 
-const ChatPanel = ({ onCodeExtracted, onClose }: ChatPanelProps) => {
-  // 从 AI 响应中提取 Typst 代码
-  const extractTypstCode = useCallback((content: string) => {
-    // 提取 ```typst ... ``` 代码块
-    const match = content.match(/```typst\n([\s\S]*?)```/);
-    if (match) {
-      onCodeExtracted(match[1].trim());
+type UpdateTypstResult = CompileFeedback;
+
+const UpdateTypstToolCard: ToolCallMessagePartComponent<Record<string, unknown>, UpdateTypstResult> = ({
+  status,
+  result,
+  argsText,
+}) => {
+  const isRunning = status?.type === 'running';
+  const isComplete = status?.type === 'complete';
+  const isError = status?.type === 'incomplete' || result?.ok === false;
+  let shortArgs: { typst_code?: string } | null = null;
+  if (argsText) {
+    try {
+      shortArgs = JSON.parse(argsText) as { typst_code?: string };
+    } catch {
+      shortArgs = null;
     }
-  }, [onCodeExtracted]);
+  }
+  const codeLen = shortArgs?.typst_code?.length ?? 0;
+
+  return (
+    <div className="mx-auto w-full max-w-(--thread-max-width) px-2 py-2">
+      <div className="rounded-xl border border-slate-200 dark:border-slate-700/60 bg-white dark:bg-slate-900 px-3 py-2 text-xs">
+        <div className="flex items-center justify-between">
+          <span className="font-semibold text-slate-700 dark:text-slate-200">应用模板修改</span>
+          <span className={`px-2 py-0.5 rounded-full text-[10px] ${isRunning
+            ? 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300'
+            : isError
+              ? 'bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-300'
+              : isComplete
+                ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300'
+                : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300'
+            }`}>
+            {isRunning ? '执行中' : isError ? '失败' : isComplete ? '完成' : '待执行'}
+          </span>
+        </div>
+        <p className="mt-1 text-slate-500 dark:text-slate-400">
+          代码长度 {codeLen} 字符
+        </p>
+        {result?.error && (
+          <p className="mt-1 text-red-600 dark:text-red-400">{result.error}</p>
+        )}
+        {result?.diagnostics?.line && (
+          <p className="mt-1 text-red-500 dark:text-red-400">
+            行 {result.diagnostics.line}
+            {result.diagnostics.column ? `, 列 ${result.diagnostics.column}` : ''}
+            {result.diagnostics.snippet ? ` · ${result.diagnostics.snippet}` : ''}
+          </p>
+        )}
+      </div>
+    </div>
+  );
+};
+
+const ChatPanel = ({
+  activeTemplateId,
+  currentCode,
+  currentData,
+  initialMessages,
+  onPersistMessages,
+  onApplyAndValidate,
+  onClose,
+}: ChatPanelProps) => {
+  const [agentStatus, setAgentStatus] = useState<'idle' | 'compiling' | 'repairing' | 'success' | 'error'>('idle');
+  const [hasFailedOnce, setHasFailedOnce] = useState(false);
+  const [lastCompileDiagnostics, setLastCompileDiagnostics] = useState<CompileFeedback['diagnostics'] | null>(null);
+  const appliedByToolInTurnRef = useRef(false);
+  const latestIntentRef = useRef<'chat' | 'edit'>('chat');
+
+  const inferIntentFromText = useCallback((text: string): 'chat' | 'edit' => {
+    const normalized = text.trim().toLowerCase();
+    if (!normalized) return 'chat';
+    const editKeywords = [
+      '修改', '改成', '改下', '更新', '应用', '生成', '创建', '新建', '重写', '调整模板',
+      'change', 'update', 'apply', 'generate', 'create', 'rewrite', 'refactor',
+    ];
+    return editKeywords.some((keyword) => normalized.includes(keyword)) ? 'edit' : 'chat';
+  }, []);
+
+  const extractLastUserText = useCallback((messages: any[] | undefined): string => {
+    if (!Array.isArray(messages)) return '';
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      const m = messages[i];
+      if (m?.role !== 'user') continue;
+      if (typeof m.content === 'string') return m.content;
+      if (Array.isArray(m.parts)) {
+        return m.parts
+          .filter((p: any) => p?.type === 'text' && typeof p?.text === 'string')
+          .map((p: any) => p.text)
+          .join('\n');
+      }
+    }
+    return '';
+  }, []);
+
+  const UpdateTypstTool = useMemo(() => makeAssistantTool({
+    toolName: 'update_typst',
+    description: '应用并编译 Typst 模版代码。每次修改都要调用该工具。',
+    parameters: {
+      type: 'object',
+      properties: {
+        typst_code: { type: 'string', description: '完整的 Typst 代码' },
+        mock_data: {
+          type: 'object',
+          description: '可选，新的 mock 数据对象',
+          additionalProperties: true,
+        },
+      },
+      required: ['typst_code'],
+      additionalProperties: false,
+    },
+    disabled: !activeTemplateId,
+    render: UpdateTypstToolCard,
+    execute: async (args: Record<string, unknown>) => {
+      if (latestIntentRef.current !== 'edit') {
+        setAgentStatus('idle');
+        return { ok: false, error: '当前是咨询对话，未执行模板修改。若要改模板，请明确说“请修改/生成模板”。' };
+      }
+      if (!activeTemplateId) {
+        setAgentStatus('error');
+        return { ok: false, error: '请先在左侧选择一个模版' };
+      }
+      const nextCode = typeof args.typst_code === 'string' ? args.typst_code : '';
+      const nextData = args.mock_data && typeof args.mock_data === 'object'
+        ? (args.mock_data as Record<string, unknown>)
+        : undefined;
+      if (!nextCode.trim()) {
+        setAgentStatus('error');
+        return { ok: false, error: 'typst_code 不能为空' };
+      }
+      appliedByToolInTurnRef.current = true;
+      setAgentStatus(hasFailedOnce ? 'repairing' : 'compiling');
+      const compileResult = await onApplyAndValidate(nextCode, nextData);
+      if (compileResult.ok) {
+        setAgentStatus('success');
+        setHasFailedOnce(false);
+        setLastCompileDiagnostics(null);
+        return compileResult;
+      }
+      setAgentStatus('error');
+      setHasFailedOnce(true);
+      setLastCompileDiagnostics(compileResult.diagnostics || {
+        message: compileResult.error || '编译失败',
+      });
+      return { ok: false, error: compileResult.error || '编译失败' };
+    },
+  }), [activeTemplateId, hasFailedOnce, onApplyAndValidate]);
 
   // 使用 useChatRuntime 连接到后端 API
   const runtime = useChatRuntime({
-    transport: new DefaultChatTransport({ api: '/api/generate' }),
-    onFinish: ({ message }) => {
-      // AI 完成后，提取 Typst 代码
-      if (message.role === 'assistant') {
-        // 从 message.parts 提取文本内容
-        const textContent = message.parts
-          ?.filter((part): part is { type: 'text'; text: string } => part.type === 'text')
-          .map(part => part.text)
-          .join('') || '';
-        if (textContent) {
-          extractTypstCode(textContent);
-        }
+    messages: initialMessages as any,
+    transport: new AssistantChatTransport({
+      api: '/api/generate',
+      prepareSendMessagesRequest: async (options) => {
+        appliedByToolInTurnRef.current = false;
+        const lastUserText = extractLastUserText(options.messages as any[]);
+        latestIntentRef.current = inferIntentFromText(lastUserText);
+        return {
+          body: {
+            ...(options.body || {}),
+            id: options.id,
+            messages: options.messages,
+            trigger: options.trigger,
+            messageId: options.messageId,
+            metadata: options.requestMetadata,
+            context: {
+              template_id: activeTemplateId,
+              base_typst: currentCode,
+              base_data: currentData,
+              intent: latestIntentRef.current,
+              available_fonts: AVAILABLE_FONT_FAMILIES,
+              available_plugins: AVAILABLE_PLUGIN_SPECS,
+            },
+          },
+        };
+      },
+    }),
+    sendAutomaticallyWhen: lastAssistantMessageIsCompleteWithToolCalls,
+    onFinish: async ({ message, messages }) => {
+      if (activeTemplateId) {
+        const plainMessages = (messages || []).map((m: any) => ({
+          role: String(m?.role || 'assistant'),
+          parts: Array.isArray(m?.parts) ? m.parts : [],
+        }));
+        await onPersistMessages(plainMessages);
+      }
+      // 兜底逻辑：模型若没有真正调用工具，但输出了代码块，自动应用到编辑器。
+      if (appliedByToolInTurnRef.current || !activeTemplateId) return;
+
+      const textContent = (message.parts || [])
+        .filter((part: any) => part?.type === 'text' && typeof part?.text === 'string')
+        .map((part: any) => part.text)
+        .join('\n');
+      if (!textContent) return;
+
+      const typstMatch = textContent.match(/```typst\s*([\s\S]*?)```/i);
+      const genericCodeBlockMatch = textContent.match(/```[a-zA-Z0-9_-]*\s*([\s\S]*?)```/i);
+      const nextCode = (typstMatch?.[1] || genericCodeBlockMatch?.[1] || '').trim();
+      if (!nextCode) return;
+
+      setAgentStatus('compiling');
+      const compileResult = await onApplyAndValidate(nextCode);
+      if (compileResult.ok) {
+        setAgentStatus('success');
+        setLastCompileDiagnostics(null);
+      } else {
+        setAgentStatus('error');
+        setLastCompileDiagnostics(compileResult.diagnostics || {
+          message: compileResult.error || '编译失败',
+        });
       }
     },
   });
@@ -692,19 +1008,52 @@ const ChatPanel = ({ onCodeExtracted, onClose }: ChatPanelProps) => {
           <h1 className="font-bold text-sm text-slate-900 dark:text-white">DeepPrint AI</h1>
           <p className="text-[10px] text-slate-400 dark:text-slate-500 font-medium">设计助手在线</p>
         </div>
+        <span className={`ml-auto mr-2 px-2 py-0.5 rounded-full text-[10px] font-medium ${agentStatus === 'compiling'
+          ? 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300'
+          : agentStatus === 'repairing'
+            ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'
+            : agentStatus === 'success'
+              ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300'
+              : agentStatus === 'error'
+                ? 'bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-300'
+                : 'bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400'
+          }`}>
+          {agentStatus === 'compiling' && '编译中'}
+          {agentStatus === 'repairing' && '修复中'}
+          {agentStatus === 'success' && '已完成'}
+          {agentStatus === 'error' && '编译失败'}
+          {agentStatus === 'idle' && '待命'}
+        </span>
         <button
           onClick={onClose}
-          className="ml-auto p-1.5 rounded hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-400 dark:text-slate-500"
+          className="p-1.5 rounded hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-400 dark:text-slate-500"
         >
           <PanelRightClose size={18} />
         </button>
       </div>
+      {agentStatus === 'error' && lastCompileDiagnostics?.message && (
+        <div
+          className="px-4 py-2 text-[11px] text-red-600 dark:text-red-400 border-b border-red-100 dark:border-red-900/40 bg-red-50/70 dark:bg-red-950/20"
+          title={lastCompileDiagnostics.message}
+        >
+          最近编译错误
+          {lastCompileDiagnostics.line ? `（行 ${lastCompileDiagnostics.line}` : ''}
+          {lastCompileDiagnostics.column ? `, 列 ${lastCompileDiagnostics.column}` : ''}
+          {lastCompileDiagnostics.line ? '）' : ''}
+          ：{lastCompileDiagnostics.message}
+          {lastCompileDiagnostics.snippet ? ` · ${lastCompileDiagnostics.snippet}` : ''}
+        </div>
+      )}
 
       {/* Thread (assistant-ui) */}
       <div className="flex-1 min-h-0">
         <TooltipProvider>
           <AssistantRuntimeProvider runtime={runtime}>
-            <Thread />
+            <UpdateTypstTool />
+            <Thread
+              inputDisabled={!activeTemplateId}
+              inputDisabledReason="请先在左侧选择一个模版，再和 AI 讨论或修改"
+            />
           </AssistantRuntimeProvider>
         </TooltipProvider>
       </div>
@@ -756,6 +1105,11 @@ export default function DeepPrintStudio() {
   const [blankFolderId, setBlankFolderId] = useState('');
   const [blankError, setBlankError] = useState('');
   const [returnToBlankAfterCreateFolder, setReturnToBlankAfterCreateFolder] = useState(false);
+  const [chatSeedMessages, setChatSeedMessages] = useState<Array<{ id?: string; role: string; parts: unknown[] }>>([]);
+  const [showVersionsDialog, setShowVersionsDialog] = useState(false);
+  const [versions, setVersions] = useState<TemplateVersion[]>([]);
+  const [isLoadingVersions, setIsLoadingVersions] = useState(false);
+  const [isRestoringVersion, setIsRestoringVersion] = useState(false);
 
   // TypstPreview ref for zoom controls
   const previewRef = useRef<TypstPreviewRef>(null);
@@ -789,6 +1143,10 @@ export default function DeepPrintStudio() {
       loadFolders();
     } else {
       setFolders([]);
+      setActiveTemplateId('');
+      setCode(DEFAULT_CODE);
+      setData(DEFAULT_DATA);
+      setChatSeedMessages([]);
     }
   }, [session, loadFolders]);
 
@@ -799,11 +1157,20 @@ export default function DeepPrintStudio() {
   const handleSelectTemplate = useCallback(async (id: string) => {
     setActiveTemplateId(id);
     try {
-      const detail = await api.getTemplate(id);
+      const [detail, thread] = await Promise.all([
+        api.getTemplate(id),
+        api.getTemplateAiThread(id),
+      ]);
       setCode(detail.content || DEFAULT_CODE);
       setData(detail.mock_data && Object.keys(detail.mock_data).length > 0 ? detail.mock_data : DEFAULT_DATA);
+      setChatSeedMessages(thread.messages.map((m) => ({
+        id: m.id,
+        role: m.role,
+        parts: m.parts || [],
+      })));
     } catch (err) {
       console.error('加载模版失败:', err);
+      setChatSeedMessages([]);
     }
   }, []);
 
@@ -812,7 +1179,12 @@ export default function DeepPrintStudio() {
     if (!activeTemplateId) return;
     setIsSaving(true);
     try {
-      await api.updateTemplate(activeTemplateId, { content: code, mock_data: data });
+      await api.updateTemplate(activeTemplateId, {
+        content: code,
+        mock_data: data,
+        update_source: 'manual',
+        update_summary: '手动保存',
+      });
     } catch (err) {
       console.error('保存失败:', err);
       alert('保存失败，请检查网络连接或登录状态');
@@ -820,6 +1192,58 @@ export default function DeepPrintStudio() {
       setIsSaving(false);
     }
   }, [activeTemplateId, code, data]);
+
+  const handlePersistAiMessages = useCallback(async (messages: Array<{ role: string; parts: unknown[] }>) => {
+    if (!activeTemplateId) return;
+    try {
+      await api.putTemplateAiThreadMessages(activeTemplateId, messages.slice(-200));
+    } catch (err) {
+      console.error('保存 AI 会话失败:', err);
+    }
+  }, [activeTemplateId]);
+
+  const loadVersions = useCallback(async () => {
+    if (!activeTemplateId) return;
+    setIsLoadingVersions(true);
+    try {
+      const list = await api.getTemplateVersions(activeTemplateId, 30);
+      setVersions(list);
+    } catch (err) {
+      console.error('加载版本历史失败:', err);
+      setVersions([]);
+    } finally {
+      setIsLoadingVersions(false);
+    }
+  }, [activeTemplateId]);
+
+  const handleOpenVersions = useCallback(async () => {
+    if (!activeTemplateId) return;
+    setShowVersionsDialog(true);
+    await loadVersions();
+  }, [activeTemplateId, loadVersions]);
+
+  const handleRestoreVersion = useCallback(async (versionId: string) => {
+    if (!activeTemplateId) return;
+    setIsRestoringVersion(true);
+    try {
+      const restored = await api.restoreTemplateVersion(activeTemplateId, versionId);
+      setCode(restored.content || DEFAULT_CODE);
+      setData(restored.mock_data && Object.keys(restored.mock_data).length > 0 ? restored.mock_data : DEFAULT_DATA);
+      if (previewRef.current) {
+        await previewRef.current.compileAndGetError(
+          restored.content || DEFAULT_CODE,
+          restored.mock_data && Object.keys(restored.mock_data).length > 0 ? restored.mock_data : DEFAULT_DATA,
+          true,
+        );
+      }
+      await loadVersions();
+    } catch (err) {
+      console.error('回滚版本失败:', err);
+      alert(err instanceof Error ? err.message : '回滚失败');
+    } finally {
+      setIsRestoringVersion(false);
+    }
+  }, [activeTemplateId, loadVersions]);
 
   // 打开新建分组弹窗
   const handleCreateFolder = useCallback(() => {
@@ -1052,6 +1476,7 @@ export default function DeepPrintStudio() {
           setActiveTemplateId('');
           setCode(DEFAULT_CODE);
           setData(DEFAULT_DATA);
+          setChatSeedMessages([]);
         }
       }
       await loadFolders();
@@ -1102,10 +1527,34 @@ export default function DeepPrintStudio() {
   const ThemeIcon = theme === THEMES.SYSTEM ? Monitor : (theme === THEMES.LIGHT ? Sun : Moon);
   const themeLabel = theme === THEMES.SYSTEM ? '跟随系统' : (theme === THEMES.LIGHT ? '浅色' : '深色');
 
-  // AI 代码回调
-  const handleCodeExtracted = useCallback((extractedCode: string) => {
-    setCode(extractedCode);
-  }, []);
+  // AI 工具回调：应用代码并立即编译，返回给模型用于自动修复循环
+  const handleApplyAndValidateFromAi = useCallback(async (nextCode: string, nextData?: Record<string, unknown>) => {
+    const mergedData = nextData ?? data;
+    if (nextData) {
+      setData(nextData);
+    }
+    setCode(nextCode);
+    if (!previewRef.current) {
+      return { ok: false, error: '预览引擎未就绪' };
+    }
+    const compileResult = await previewRef.current.compileAndGetError(nextCode, mergedData, true);
+    if (compileResult.ok && activeTemplateId) {
+      try {
+        await api.updateTemplate(activeTemplateId, {
+          content: nextCode,
+          mock_data: mergedData,
+          update_source: 'ai',
+          update_summary: 'AI 应用模板修改',
+        });
+      } catch (err) {
+        return {
+          ok: false,
+          error: err instanceof Error ? err.message : 'AI 修改已应用，但持久化失败',
+        };
+      }
+    }
+    return compileResult;
+  }, [activeTemplateId, data]);
 
   // Monaco 编辑器 ref
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
@@ -1281,6 +1730,15 @@ export default function DeepPrintStudio() {
             )}
 
             <button
+              onClick={handleOpenVersions}
+              disabled={!hasActiveTemplate}
+              className="flex items-center gap-2 px-3 py-1.5 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 disabled:opacity-50 text-slate-600 dark:text-slate-300 text-xs font-bold rounded-lg border border-slate-200 dark:border-slate-700 shadow-sm transition-all"
+              title={!hasActiveTemplate ? '请先选择模版' : '查看历史版本并回滚'}
+            >
+              历史版本
+            </button>
+
+            <button
               onClick={() => setShowDataModal(true)}
               disabled={!hasActiveTemplate}
               className="flex items-center gap-2 px-3 py-1.5 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 disabled:opacity-50 text-slate-600 dark:text-slate-300 text-xs font-bold rounded-lg border border-slate-200 dark:border-slate-700 shadow-sm transition-all"
@@ -1438,7 +1896,13 @@ export default function DeepPrintStudio() {
       {/* ─── 右侧栏：AI 对话 ─── */}
       <div className={showChat ? '' : 'hidden'}>
         <ChatPanel
-          onCodeExtracted={handleCodeExtracted}
+          key={activeTemplateId || 'no-template'}
+          activeTemplateId={activeTemplateId}
+          currentCode={code}
+          currentData={data}
+          initialMessages={chatSeedMessages}
+          onPersistMessages={handlePersistAiMessages}
+          onApplyAndValidate={handleApplyAndValidateFromAi}
           onClose={() => setShowChat(false)}
         />
       </div>
@@ -1451,6 +1915,43 @@ export default function DeepPrintStudio() {
         onSave={setData}
         resolvedTheme={resolvedTheme}
       />
+
+      <Dialog open={showVersionsDialog} onOpenChange={setShowVersionsDialog}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>历史版本</DialogTitle>
+            <DialogDescription>每次手动保存、AI 应用成功、回滚操作都会生成版本快照。</DialogDescription>
+          </DialogHeader>
+          <div className="max-h-[55vh] overflow-auto divide-y divide-slate-200 dark:divide-slate-700/60 border border-slate-200 dark:border-slate-700/60 rounded-lg">
+            {isLoadingVersions && (
+              <div className="px-4 py-6 text-sm text-slate-500 dark:text-slate-400">加载中...</div>
+            )}
+            {!isLoadingVersions && versions.length === 0 && (
+              <div className="px-4 py-6 text-sm text-slate-500 dark:text-slate-400">暂无历史版本</div>
+            )}
+            {!isLoadingVersions && versions.map((version) => (
+              <div key={version.id} className="px-4 py-3 flex items-center gap-3">
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-medium text-slate-800 dark:text-slate-100">
+                    {version.source === 'ai' ? 'AI 修改' : version.source === 'rollback' ? '回滚版本' : '手动保存'}
+                  </p>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 truncate">
+                    {new Date((version.created_at || 0) * 1000).toLocaleString()}
+                    {version.summary ? ` · ${version.summary}` : ''}
+                  </p>
+                </div>
+                <button
+                  disabled={isRestoringVersion}
+                  onClick={() => handleRestoreVersion(version.id)}
+                  className="px-3 py-1.5 text-xs rounded-md bg-slate-900 text-white hover:bg-slate-800 disabled:opacity-50"
+                >
+                  {isRestoringVersion ? '恢复中...' : '恢复到此版本'}
+                </button>
+              </div>
+            ))}
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* 登录对话框 */}
       <LoginDialog open={showLoginDialog} onOpenChange={setShowLoginDialog} />

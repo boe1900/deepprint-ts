@@ -34,10 +34,13 @@ import {
 } from "lucide-react";
 import type { FC } from "react";
 
-export const Thread: FC = () => {
+export const Thread: FC<{ inputDisabled?: boolean; inputDisabledReason?: string }> = ({
+  inputDisabled = false,
+  inputDisabledReason = "请先选择一个模版后再开始对话",
+}) => {
   return (
     <ThreadPrimitive.Root
-      className="aui-root aui-thread-root @container flex h-full flex-col bg-transparent text-slate-900 dark:text-slate-100"
+      className="aui-root aui-thread-root @container flex h-full flex-col bg-transparent text-sm text-slate-900 dark:text-slate-100"
       style={{
         ["--thread-max-width" as string]: "44rem",
       }}
@@ -60,7 +63,7 @@ export const Thread: FC = () => {
 
         <ThreadPrimitive.ViewportFooter className="aui-thread-viewport-footer sticky bottom-0 mx-auto mt-auto flex w-full max-w-(--thread-max-width) flex-col gap-3 overflow-visible px-2 pb-4 md:pb-6">
           <ThreadScrollToBottom />
-          <Composer />
+          {inputDisabled ? <DisabledComposer reason={inputDisabledReason} /> : <Composer />}
         </ThreadPrimitive.ViewportFooter>
       </ThreadPrimitive.Viewport>
     </ThreadPrimitive.Root>
@@ -86,10 +89,10 @@ const ThreadWelcome: FC = () => {
     <div className="aui-thread-welcome-root mx-auto my-auto flex w-full max-w-(--thread-max-width) grow flex-col">
       <div className="aui-thread-welcome-center flex w-full grow flex-col items-center justify-center">
         <div className="aui-thread-welcome-message flex size-full flex-col justify-center px-4">
-          <h1 className="aui-thread-welcome-message-inner fade-in slide-in-from-bottom-1 animate-in font-semibold text-2xl duration-200">
+          <h1 className="aui-thread-welcome-message-inner fade-in slide-in-from-bottom-1 animate-in font-semibold text-lg duration-200">
             你好，我是 DeepPrint AI
           </h1>
-          <p className="aui-thread-welcome-message-inner fade-in slide-in-from-bottom-1 animate-in text-slate-500 dark:text-slate-400 text-lg delay-75 duration-200">
+          <p className="aui-thread-welcome-message-inner fade-in slide-in-from-bottom-1 animate-in text-slate-500 dark:text-slate-400 text-sm delay-75 duration-200">
             告诉我你要做的模板类型、尺寸和内容
           </p>
         </div>
@@ -138,7 +141,7 @@ const Composer: FC = () => {
         <ComposerAttachments />
         <ComposerPrimitive.Input
           placeholder="描述你要做的模板（用途、尺寸、字段）"
-          className="aui-composer-input mb-1 max-h-32 min-h-14 w-full resize-none bg-transparent px-4 pt-2 pb-3 text-sm outline-none placeholder:text-slate-400 dark:placeholder:text-slate-500 focus-visible:ring-0"
+          className="aui-composer-input mb-1 max-h-32 min-h-14 w-full resize-none bg-transparent px-4 pt-2 pb-3 text-[13px] outline-none placeholder:text-slate-400 dark:placeholder:text-slate-500 focus-visible:ring-0"
           rows={1}
           autoFocus
           aria-label="Message input"
@@ -146,6 +149,17 @@ const Composer: FC = () => {
         <ComposerAction />
       </ComposerPrimitive.AttachmentDropzone>
     </ComposerPrimitive.Root>
+  );
+};
+
+const DisabledComposer: FC<{ reason: string }> = ({ reason }) => {
+  return (
+    <div className="rounded-2xl border border-slate-200 dark:border-slate-700/60 bg-white dark:bg-slate-900 px-4 py-3">
+      <p className="text-[12px] text-slate-500 dark:text-slate-400">{reason}</p>
+      <div className="mt-2 h-9 w-full rounded-xl border border-slate-200/80 dark:border-slate-700/80 bg-slate-50 dark:bg-slate-800/40 px-3 flex items-center text-[12px] text-slate-400 dark:text-slate-500">
+        对话输入已禁用
+      </div>
+    </div>
   );
 };
 
@@ -201,7 +215,7 @@ const AssistantMessage: FC = () => {
       className="aui-assistant-message-root fade-in slide-in-from-bottom-1 relative mx-auto w-full max-w-(--thread-max-width) animate-in py-3 duration-150"
       data-role="assistant"
     >
-      <div className="aui-assistant-message-content wrap-break-word rounded-2xl border border-slate-200/70 dark:border-slate-700/60 bg-white/80 dark:bg-slate-900/60 px-4 py-3 text-foreground leading-relaxed shadow-sm">
+      <div className="aui-assistant-message-content wrap-break-word rounded-2xl border border-slate-200/70 dark:border-slate-700/60 bg-white/80 dark:bg-slate-900/60 px-4 py-3 text-[13px] text-foreground leading-6 shadow-sm">
         <MessagePrimitive.Parts
           components={{
             Text: MarkdownText,
@@ -277,7 +291,7 @@ const UserMessage: FC = () => {
       <UserMessageAttachments />
 
       <div className="aui-user-message-content-wrapper relative col-start-2 min-w-0">
-        <div className="aui-user-message-content wrap-break-word rounded-2xl bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900 px-4 py-2.5 shadow-sm">
+        <div className="aui-user-message-content wrap-break-word rounded-2xl bg-slate-900 text-[13px] text-white dark:bg-slate-100 dark:text-slate-900 px-4 py-2.5 shadow-sm">
           <MessagePrimitive.Parts />
         </div>
         <div className="aui-user-action-bar-wrapper absolute top-1/2 left-0 -translate-x-full -translate-y-1/2 pr-2">

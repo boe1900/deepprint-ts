@@ -25,6 +25,31 @@ export interface FolderWithTemplates extends Folder {
     templates: Template[]
 }
 
+export interface AiThreadMessage {
+    id: string
+    role: string
+    parts: unknown[]
+    created_at: number
+}
+
+export interface AiThreadDetail {
+    thread: {
+        id: string
+        title: string
+        template_id: string
+        created_at: number
+        updated_at: number
+    }
+    messages: AiThreadMessage[]
+}
+
+export interface TemplateVersion {
+    id: string
+    source: 'ai' | 'manual' | 'rollback' | string
+    summary: string
+    created_at: number
+}
+
 // ─── API Error ───────────────────────────────────────────────────────────────
 
 export class ApiError extends Error {
@@ -103,7 +128,14 @@ export const api = {
     /** 更新模版 */
     async updateTemplate(
         id: string,
-        data: Partial<{ name: string; content: string; mock_data: Record<string, unknown>; status: string }>
+        data: Partial<{
+            name: string
+            content: string
+            mock_data: Record<string, unknown>
+            status: string
+            update_source: 'ai' | 'manual' | 'rollback'
+            update_summary: string
+        }>
     ): Promise<void> {
         await request<{ success: boolean }>(`/api/templates/${id}`, {
             method: 'PUT',
@@ -116,5 +148,38 @@ export const api = {
         await request<{ success: boolean }>(`/api/templates/${id}`, {
             method: 'DELETE',
         })
+    },
+
+    /** 获取模板维度 AI 会话 */
+    async getTemplateAiThread(templateId: string): Promise<AiThreadDetail> {
+        return request<AiThreadDetail>(`/api/templates/${templateId}/ai-thread`)
+    },
+
+    /** 覆盖保存模板 AI 会话消息 */
+    async putTemplateAiThreadMessages(
+        templateId: string,
+        messages: Array<{ role: string; parts: unknown[] }>
+    ): Promise<void> {
+        await request<{ success: boolean }>(`/api/templates/${templateId}/ai-thread/messages`, {
+            method: 'PUT',
+            body: JSON.stringify({ messages }),
+        })
+    },
+
+    /** 获取模板版本列表 */
+    async getTemplateVersions(templateId: string, limit = 20): Promise<TemplateVersion[]> {
+        const data = await request<{ versions: TemplateVersion[] }>(`/api/templates/${templateId}/versions?limit=${limit}`)
+        return data.versions
+    },
+
+    /** 回滚到指定版本 */
+    async restoreTemplateVersion(
+        templateId: string,
+        versionId: string
+    ): Promise<{ success: boolean; content: string; mock_data: Record<string, unknown> }> {
+        return request<{ success: boolean; content: string; mock_data: Record<string, unknown> }>(
+            `/api/templates/${templateId}/versions/${versionId}/restore`,
+            { method: 'POST' },
+        )
     },
 }
