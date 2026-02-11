@@ -103,10 +103,10 @@ export default function TemplateTree({
 
             {/* Logo */}
             <div className="h-14 border-b border-slate-100 dark:border-slate-700/60 flex items-center px-4 shrink-0">
-                <div className="flex items-center gap-2 text-blue-600 dark:text-blue-400 font-black text-lg tracking-tight">
-                    <Printer size={20} strokeWidth={2.5} />
-                    <span>DeepPrint</span>
-                </div>
+            <div className="flex items-center gap-2 text-slate-900 dark:text-white font-black text-lg tracking-tight">
+                <Printer size={20} strokeWidth={2.5} />
+                <span>DeepPrint</span>
+            </div>
             </div>
 
             {/* Search */}
