@@ -4,7 +4,7 @@ GITHUB_CLIENT_SECRET=your_github_client_secret
 BETTER_AUTH_SECRET=replace-with-a-long-random-string
 # BETTER_AUTH_URL=http://127.0.0.1:8788
 
-# AI provider
+# AI provider (optional, only needed if you want a server-side default AI config)
 AI_PROVIDER_TYPE=google
 AI_API_KEY=your_ai_api_key
 AI_MODEL=gemini-flash-latest
@@ -16,3 +16,9 @@ AI_MODEL=gemini-flash-latest
 # Compatibility aliases (optional)
 # AI_PROVIDER=openai
 # GOOGLE_GENERATIVE_AI_API_KEY=
+
+# Trial limits (optional)
+TRIAL_LIMIT_ENABLED=false
+TRIAL_SUCCESSFUL_GENERATIONS_PER_24H=5
+TRIAL_SUCCESSFUL_GENERATION_DEDUP_MINUTES=30
+# TRIAL_LIMIT_EXEMPT_EMAILS=you@example.com

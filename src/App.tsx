@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { api, type FolderWithTemplates } from '@/lib/api-client';
+import { ApiError, api, type FolderWithTemplates } from '@/lib/api-client';
 import {
   Sun, Moon, Monitor,
 } from 'lucide-react';
@@ -13,6 +13,17 @@ import { type TypstPreviewRef } from '@/components/TypstPreview';
 import ChatPanel from '@/components/ChatPanel';
 import TemplateVersionsDialog from '@/components/TemplateVersionsDialog';
 import WorkspacePane, { type WorkspaceTab } from '@/components/WorkspacePane';
+import LocalAiSettingsDialog from '@/components/LocalAiSettingsDialog';
+import {
+  clearLocalAIConfig,
+  hasSeenLocalAIOnboarding,
+  isLocalAIConfigReady,
+  loadLocalAIConfig,
+  markLocalAIOnboardingSeen,
+  resetLocalAIOnboarding,
+  saveLocalAIConfig,
+  type LocalAIConfig,
+} from '@/lib/local-ai-config';
 
 // Auth
 import { authClient } from '@/lib/auth-client';
@@ -151,6 +162,8 @@ export default function DeepPrintStudio() {
   const [previewZoom, setPreviewZoom] = useState(1);
   const [showDataModal, setShowDataModal] = useState(false);
   const [showLoginDialog, setShowLoginDialog] = useState(false);
+  const [showAiSettingsDialog, setShowAiSettingsDialog] = useState(false);
+  const [localAiConfig, setLocalAiConfig] = useState<LocalAIConfig | null>(() => loadLocalAIConfig());
 
   // API 数据状态
   const [folders, setFolders] = useState<FolderWithTemplates[]>([]);
@@ -216,6 +229,37 @@ export default function DeepPrintStudio() {
   }, [session, loadFolders, resetActiveTemplate]);
 
   const isAuthed = !!session?.user;
+  const hasLocalAiConfig = isLocalAIConfigReady(localAiConfig);
+
+  const handleSaveLocalAiConfig = useCallback((nextConfig: LocalAIConfig) => {
+    const saved = saveLocalAIConfig(nextConfig);
+    markLocalAIOnboardingSeen();
+    setLocalAiConfig(saved);
+  }, []);
+
+  const handleClearLocalAiConfig = useCallback(() => {
+    clearLocalAIConfig();
+    resetLocalAIOnboarding();
+    setLocalAiConfig(null);
+  }, []);
+
+  useEffect(() => {
+    if (!showChat) return;
+    if (hasLocalAiConfig) return;
+    if (showAiSettingsDialog) return;
+    if (hasSeenLocalAIOnboarding()) return;
+
+    markLocalAIOnboardingSeen();
+    setShowAiSettingsDialog(true);
+  }, [hasLocalAiConfig, showAiSettingsDialog, showChat]);
+
+  const handleShowChat = useCallback(() => {
+    setShowChat(true);
+    if (!hasLocalAiConfig) {
+      markLocalAIOnboardingSeen();
+      setShowAiSettingsDialog(true);
+    }
+  }, [hasLocalAiConfig]);
 
   // 保存当前模版
   const handleSave = useCallback(async () => {
@@ -301,6 +345,8 @@ export default function DeepPrintStudio() {
 
   // AI 工具回调：应用代码并立即编译，返回给模型用于自动修复循环
   const handleApplyAndValidateFromAi = useCallback(async (nextCode: string, nextData?: Record<string, unknown>) => {
+    const previousCode = code;
+    const previousData = data;
     const mergedData = nextData ?? data;
     if (nextData) {
       setData(nextData);
@@ -319,6 +365,17 @@ export default function DeepPrintStudio() {
           update_summary: 'AI 应用模板修改',
         });
       } catch (err) {
+        if (err instanceof ApiError && err.status === 429) {
+          setCode(previousCode);
+          setData(previousData);
+          if (previewRef.current) {
+            try {
+              await previewRef.current.compileAndGetError(previousCode, previousData, true);
+            } catch (rollbackError) {
+              console.error('回滚 AI 变更失败:', rollbackError);
+            }
+          }
+        }
         return {
           ok: false,
           error: err instanceof Error ? err.message : 'AI 修改已应用，但持久化失败',
@@ -326,7 +383,7 @@ export default function DeepPrintStudio() {
       }
     }
     return compileResult;
-  }, [activeTemplateId, data, setCode, setData]);
+  }, [activeTemplateId, code, data, setCode, setData]);
 
   return (
     <div className="flex h-screen bg-white dark:bg-slate-900 text-slate-900 dark:text-white overflow-hidden transition-colors">
@@ -349,6 +406,8 @@ export default function DeepPrintStudio() {
         themeLabel={themeLabel}
         ThemeIcon={ThemeIcon}
         isAuthed={isAuthed}
+        hasLocalAiConfig={hasLocalAiConfig}
+        onOpenAiSettings={() => setShowAiSettingsDialog(true)}
       />
 
       <WorkspacePane
@@ -374,7 +433,7 @@ export default function DeepPrintStudio() {
         onPrefixLine={prefixLine}
         onPreviewZoomChange={setPreviewZoom}
         onSave={handleSave}
-        onShowChat={() => setShowChat(true)}
+        onShowChat={handleShowChat}
         onWrapSelection={wrapSelection}
       />
 
@@ -386,9 +445,11 @@ export default function DeepPrintStudio() {
           currentCode={code}
           currentData={data}
           initialMessages={chatSeedMessages}
+          localAiConfig={localAiConfig}
           onPersistMessages={handlePersistAiMessages}
           onApplyAndValidate={handleApplyAndValidateFromAi}
           onClose={() => setShowChat(false)}
+          onOpenSettings={() => setShowAiSettingsDialog(true)}
         />
       </div>
 
@@ -412,6 +473,14 @@ export default function DeepPrintStudio() {
 
       {/* 登录对话框 */}
       <LoginDialog open={showLoginDialog} onOpenChange={setShowLoginDialog} />
+
+      <LocalAiSettingsDialog
+        open={showAiSettingsDialog}
+        onOpenChange={setShowAiSettingsDialog}
+        value={localAiConfig}
+        onSave={handleSaveLocalAiConfig}
+        onClear={handleClearLocalAiConfig}
+      />
 
       <TemplateDialogStack folders={folders} templateDialogs={templateDialogs} />
     </div>

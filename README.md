@@ -41,7 +41,7 @@ DeepPrint TS 是一个面向 Typst 模板生产的实验性工作台：你可以
 - npm 10+
 - Wrangler 4（`npm ci` 会自动安装本地版本）
 - 一个可用的 GitHub OAuth App
-- 一个可用的 AI provider key（如果你要用 AI 编辑能力）
+- 如果你要调试“服务端默认 AI”模式，需要一个可用的 AI provider key
 
 ### 2. 安装依赖
 
@@ -64,16 +64,22 @@ cp .dev.vars.example .dev.vars
 - `GITHUB_CLIENT_ID`
 - `GITHUB_CLIENT_SECRET`
 - `BETTER_AUTH_SECRET`
-- `AI_PROVIDER_TYPE`
-- `AI_API_KEY`
-- `AI_BASE_URL`（仅 OpenAI-compatible provider 需要）
-- `AI_MODEL`
-- `AI_API_MODE`
+- `AI_PROVIDER_TYPE`（可选，仅服务端默认 AI 模式需要）
+- `AI_API_KEY`（可选，仅服务端默认 AI 模式需要）
+- `AI_BASE_URL`（可选，仅 OpenAI-compatible provider 需要）
+- `AI_MODEL`（可选）
+- `AI_API_MODE`（可选）
+- `TRIAL_LIMIT_ENABLED`（可选，开启试用成品额度限制）
+- `TRIAL_SUCCESSFUL_GENERATIONS_PER_24H`（可选）
+- `TRIAL_SUCCESSFUL_GENERATION_DEDUP_MINUTES`（可选）
+- `TRIAL_LIMIT_EXEMPT_EMAILS`（可选）
 
 说明：
 
 - `BETTER_AUTH_URL` 不填也可以；本地开发时会从请求 URL 自动推断。
-- 如果只想体验模板编辑和预览，不使用 AI，可以先不填 AI 相关变量。
+- 现在默认推荐使用“本地 BYOK”模式：用户在浏览器里自行配置 Gemini 或 OpenAI-compatible 的 `API Key`，配置只保存在当前浏览器。
+- 如果只想体验模板编辑和预览，不使用 AI，可以不填 AI 相关变量。
+- 如果你想保留一个“服务端默认 AI”兜底，也可以继续填写 AI 环境变量。
 
 ### 4. 初始化本地 D1
 
@@ -83,6 +89,7 @@ cp .dev.vars.example .dev.vars
 wrangler d1 execute deepprint-auth --local --file=./migrations/0001_auth.sql
 wrangler d1 execute deepprint-auth --local --file=./migrations/0002_deepprint_schema.sql
 wrangler d1 execute deepprint-auth --local --file=./migrations/0003_ai_threads_and_template_versions.sql
+wrangler d1 execute deepprint-auth --local --file=./migrations/0004_trial_generation_limits.sql
 ```
 
 如果你准备部署自己的实例，请把 `wrangler.toml` 里的 D1 配置替换成你自己的数据库信息。
@@ -112,6 +119,13 @@ npm run dev:full
 
 ## 环境变量
 
+### 本地 BYOK
+
+- 前端提供本地 AI 设置弹窗，当前支持 `Gemini` 与 `OpenAI-compatible`
+- 用户配置会保存在浏览器 `localStorage`
+- 发起 `/api/generate` 时，配置只会随当前请求临时传给服务端使用，不会写入数据库
+- 如果你完全不想提供服务端默认 AI，可以不设置下面的 AI 环境变量
+
 ### 通用 AI 配置
 
 - `AI_PROVIDER_TYPE`：`google | openai | anthropic`
@@ -132,7 +146,36 @@ npm run dev:full
 - `BETTER_AUTH_SECRET`
 - `BETTER_AUTH_URL`：可选
 
+### 试用额度限制
+
+- `TRIAL_LIMIT_ENABLED`：`true | false`，默认关闭
+- `TRIAL_SUCCESSFUL_GENERATIONS_PER_24H`：过去 24 小时内允许成功生成的成品模板数量，默认 `5`
+- `TRIAL_SUCCESSFUL_GENERATION_DEDUP_MINUTES`：同一模板在这个时间窗口内重复 AI 成功应用，只记一次成品，默认 `30`
+- `TRIAL_LIMIT_EXEMPT_EMAILS`：逗号分隔的邮箱白名单，这些账号不受试用额度限制
+
+说明：
+
+- 这套限制按“成功产出成品”计，不按 `/api/generate` 请求次数计。
+- 只有 AI 成功应用并写回模板时才会计数。
+- 同一模板在短时间内连续小修不会反复扣次数。
+
 ## Provider 示例
+
+本地 BYOK 推荐配置：
+
+Gemini：
+
+- `provider_type=google`
+- `model=gemini-flash-latest`
+
+OpenAI-compatible：
+
+- `provider_type=openai`
+- `base_url=https://api.openai.com/v1`
+- `model=gpt-4o-mini`
+- `api_mode=chat`
+
+服务端默认 AI 环境变量示例：
 
 Google：
 

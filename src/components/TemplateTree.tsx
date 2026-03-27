@@ -27,6 +27,8 @@ interface TemplateTreeProps {
     themeLabel?: string;
     ThemeIcon?: LucideIcon;
     isAuthed?: boolean;
+    hasLocalAiConfig?: boolean;
+    onOpenAiSettings?: () => void;
 }
 
 // ─── Component ───────────────────────────────────────────────────────────────
@@ -36,6 +38,7 @@ export default function TemplateTree({
     onCreateFolder, onCreateTemplate,
     onRenameFolder, onDeleteFolder, onRenameTemplate, onDeleteTemplate,
     user, onLogin, onCycleTheme, themeLabel, ThemeIcon, isAuthed,
+    hasLocalAiConfig, onOpenAiSettings,
 }: TemplateTreeProps) {
     const [openFolders, setOpenFolders] = useState<Set<string>>(new Set());
     const [searchQuery, setSearchQuery] = useState('');
@@ -256,9 +259,21 @@ export default function TemplateTree({
                                     <ThemeIcon size={14} />
                                 </button>
                             )}
-                            <button className="p-1.5 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-400 dark:text-slate-500 transition-colors">
-                                <Settings size={14} />
-                            </button>
+                            <div className="relative">
+                                <button
+                                    onClick={(e) => { e.stopPropagation(); onOpenAiSettings?.(); }}
+                                    className={`p-1.5 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors ${hasLocalAiConfig
+                                        ? 'text-emerald-500 dark:text-emerald-400'
+                                        : 'text-slate-400 dark:text-slate-500'
+                                        }`}
+                                    title={hasLocalAiConfig ? '本地 AI 已配置' : '配置本地 AI'}
+                                >
+                                    <Settings size={14} />
+                                </button>
+                                {hasLocalAiConfig && (
+                                    <span className="absolute right-1 top-1 block h-2 w-2 rounded-full bg-emerald-500 ring-2 ring-white dark:ring-slate-900" />
+                                )}
+                            </div>
                         </div>
                     </div>
                 ) : (
@@ -271,6 +286,21 @@ export default function TemplateTree({
                             >
                                 <LogIn size={14} /> 使用 GitHub 登录
                             </button>
+                            <div className="ml-2 relative">
+                                <button
+                                    onClick={onOpenAiSettings}
+                                    className={`p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors ${hasLocalAiConfig
+                                        ? 'text-emerald-500 dark:text-emerald-400'
+                                        : 'text-slate-400 dark:text-slate-500'
+                                        }`}
+                                    title={hasLocalAiConfig ? '本地 AI 已配置' : '配置本地 AI'}
+                                >
+                                    <Settings size={16} />
+                                </button>
+                                {hasLocalAiConfig && (
+                                    <span className="absolute right-1 top-1 block h-2 w-2 rounded-full bg-emerald-500 ring-2 ring-white dark:ring-slate-900" />
+                                )}
+                            </div>
                             {ThemeIcon && (
                                 <button
                                     onClick={onCycleTheme}

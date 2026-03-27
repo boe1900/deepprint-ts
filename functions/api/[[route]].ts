@@ -3,7 +3,8 @@ import { handle } from 'hono/cloudflare-pages'
 import { createMiddleware } from 'hono/factory'
 import { convertToModelMessages, jsonSchema, stepCountIs, streamText } from 'ai'
 import { createAuth } from '../lib/auth'
-import { resolveModelFromEnv } from '../lib/ai-provider'
+import { resolveModelFromConfig, resolveModelFromEnv } from '../lib/ai-provider'
+import { evaluateTrialGenerationLimit, recordSuccessfulGeneration } from '../lib/trial-generation-limit'
 import { D1Database } from '@cloudflare/workers-types'
 
 type Bindings = {
@@ -19,6 +20,10 @@ type Bindings = {
   GITHUB_CLIENT_SECRET: string
   BETTER_AUTH_SECRET: string
   BETTER_AUTH_URL?: string
+  TRIAL_LIMIT_ENABLED?: string
+  TRIAL_SUCCESSFUL_GENERATIONS_PER_24H?: string
+  TRIAL_SUCCESSFUL_GENERATION_DEDUP_MINUTES?: string
+  TRIAL_LIMIT_EXEMPT_EMAILS?: string
 }
 
 type Variables = {
@@ -99,9 +104,18 @@ type ClientToolSchema = {
   parameters?: unknown
 }
 
+type RequestScopedAIConfig = {
+  provider_type?: string
+  api_key?: string
+  base_url?: string
+  model?: string
+  api_mode?: string
+}
+
 type GenerateRequest = {
   messages: Array<Omit<any, 'id'>>
   tools?: Record<string, ClientToolSchema>
+  byok?: RequestScopedAIConfig
   context?: {
     template_id?: string
     base_typst?: string
@@ -135,6 +149,80 @@ const parseMockData = (raw: unknown): Record<string, unknown> => {
       : {}
   } catch {
     return {}
+  }
+}
+
+const normalizeOptionalString = (value: unknown) => {
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+const isPrivateIpv4Hostname = (hostname: string) => {
+  const ipv4Pattern = /^(\d{1,3}\.){3}\d{1,3}$/
+  if (!ipv4Pattern.test(hostname)) return false
+
+  const octets = hostname.split('.').map((segment) => Number(segment))
+  if (octets.some((segment) => !Number.isInteger(segment) || segment < 0 || segment > 255)) {
+    return false
+  }
+
+  const [a, b] = octets
+  if (a === 10 || a === 127 || a === 0) return true
+  if (a === 169 && b === 254) return true
+  if (a === 172 && b >= 16 && b <= 31) return true
+  if (a === 192 && b === 168) return true
+  return false
+}
+
+const assertSafeRequestScopedBaseURL = (rawBaseURL: string) => {
+  if (!rawBaseURL) {
+    throw new Error('OpenAI-compatible 需要提供 Base URL')
+  }
+
+  let parsed: URL
+  try {
+    parsed = new URL(rawBaseURL)
+  } catch {
+    throw new Error('Base URL 格式不合法')
+  }
+
+  if (parsed.protocol !== 'https:') {
+    throw new Error('Base URL 必须使用 https')
+  }
+
+  const hostname = parsed.hostname.toLowerCase()
+  if (
+    hostname === 'localhost'
+    || hostname === '::1'
+    || hostname.endsWith('.local')
+    || isPrivateIpv4Hostname(hostname)
+  ) {
+    throw new Error('出于安全考虑，Base URL 不能指向本地或内网地址')
+  }
+
+  return rawBaseURL.replace(/\/+$/, '')
+}
+
+const parseRequestScopedAIConfig = (raw?: RequestScopedAIConfig) => {
+  if (!raw) return null
+
+  const apiKey = normalizeOptionalString(raw.api_key)
+  if (!apiKey) {
+    throw new Error('请先配置本地 AI Key')
+  }
+
+  const providerType = normalizeOptionalString(raw.provider_type) || 'google'
+  const model = normalizeOptionalString(raw.model)
+  const apiMode = normalizeOptionalString(raw.api_mode)
+  const baseURL = providerType === 'openai'
+    ? assertSafeRequestScopedBaseURL(normalizeOptionalString(raw.base_url))
+    : undefined
+
+  return {
+    providerType,
+    apiKey,
+    model,
+    apiMode,
+    baseURL,
   }
 }
 
@@ -210,7 +298,7 @@ ${dataContent}
 // AI 生成端点
 app.post('/generate', requireAuth, async (c) => {
   try {
-    const { messages, tools, context } = await c.req.json<GenerateRequest>()
+    const { messages, tools, context, byok } = await c.req.json<GenerateRequest>()
     if (!messages || !Array.isArray(messages)) {
       return c.json({ error: 'messages 参数不合法' }, 400)
     }
@@ -242,7 +330,10 @@ app.post('/generate', requireAuth, async (c) => {
       ? context!.available_plugins!
       : AVAILABLE_PACKAGES.map((pkg) => ({ spec: pkg, description: '' }))
 
-    const { providerType, model, apiMode, languageModel } = resolveModelFromEnv(c.env)
+    const requestScopedAIConfig = parseRequestScopedAIConfig(byok)
+    const { providerType, model, apiMode, languageModel } = requestScopedAIConfig
+      ? resolveModelFromConfig(requestScopedAIConfig)
+      : resolveModelFromEnv(c.env)
 
     const templateContextSection = buildTemplateContextSection(context)
 
@@ -649,7 +740,8 @@ app.post('/templates/:id/versions/:versionId/restore', requireAuth, async (c) =>
 
 // PUT /templates/:id — 更新模版
 app.put('/templates/:id', requireAuth, async (c) => {
-  const userId = (c.get('session') as any).user.id
+  const session = c.get('session') as any
+  const userId = session.user.id
   const templateId = c.req.param('id')
   const body = await c.req.json<{
     name?: string
@@ -678,6 +770,25 @@ app.put('/templates/:id', requireAuth, async (c) => {
     : (existing.mock_data || '{}')
   const contentOrDataChanged =
     nextContent !== existing.content || nextMockDataString !== (existing.mock_data || '{}')
+  const shouldTrackSuccessfulAiGeneration =
+    contentOrDataChanged && body.update_source === 'ai'
+
+  let trialGenerationDecision:
+    | Awaited<ReturnType<typeof evaluateTrialGenerationLimit>>
+    | null = null
+  if (shouldTrackSuccessfulAiGeneration) {
+    trialGenerationDecision = await evaluateTrialGenerationLimit({
+      db,
+      env: c.env,
+      templateId,
+      userEmail: session.user.email,
+      userId,
+    })
+
+    if (!trialGenerationDecision.allowed) {
+      return c.json({ error: trialGenerationDecision.errorMessage || '试用额度已用完' }, 429)
+    }
+  }
 
   if (body.name !== undefined) {
     const trimmedName = body.name.trim()
@@ -718,6 +829,14 @@ app.put('/templates/:id', requireAuth, async (c) => {
     })
   }
 
+  if (trialGenerationDecision?.shouldRecord) {
+    try {
+      await recordSuccessfulGeneration({ db, templateId, userId })
+    } catch (error) {
+      console.error('记录试用成品额度失败:', error)
+    }
+  }
+
   return c.json({ success: true })
 })
 
@@ -755,6 +874,11 @@ app.delete('/templates/:id', requireAuth, async (c) => {
 
   await db
     .prepare('DELETE FROM template_versions WHERE user_id = ? AND template_id = ?')
+    .bind(userId, templateId)
+    .run()
+
+  await db
+    .prepare('DELETE FROM trial_generation_events WHERE user_id = ? AND template_id = ?')
     .bind(userId, templateId)
     .run()
 

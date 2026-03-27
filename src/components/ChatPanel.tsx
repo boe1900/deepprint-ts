@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
-import { PanelRightClose, Sparkles } from 'lucide-react';
+import { PanelRightClose, Settings2, Sparkles } from 'lucide-react';
 import { AssistantChatTransport, useChatRuntime } from '@assistant-ui/react-ai-sdk';
 import {
   AssistantRuntimeProvider,
@@ -12,6 +12,12 @@ import { Thread } from '@/components/assistant-ui/thread';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { briefErrorText } from '@/lib/brief-error-text';
 import type { CompileFeedback } from '@/components/TypstPreview';
+import {
+  getLocalAIProviderLabel,
+  isLocalAIConfigReady,
+  toRequestScopedAIConfig,
+  type LocalAIConfig,
+} from '@/lib/local-ai-config';
 
 const AVAILABLE_FONT_FAMILIES = [
   'Noto Sans SC',
@@ -34,9 +40,11 @@ export interface ChatPanelProps {
   currentCode: string;
   currentData: Record<string, unknown>;
   initialMessages: Array<{ id?: string; role: string; parts: unknown[] }>;
+  localAiConfig: LocalAIConfig | null;
   onPersistMessages: (templateId: string, messages: Array<{ role: string; parts: unknown[] }>) => Promise<void>;
   onApplyAndValidate: (nextCode: string, nextData?: Record<string, unknown>) => Promise<CompileFeedback>;
   onClose: () => void;
+  onOpenSettings: () => void;
 }
 
 type UpdateTypstResult = CompileFeedback;
@@ -100,9 +108,11 @@ export default function ChatPanel({
   currentCode,
   currentData,
   initialMessages,
+  localAiConfig,
   onPersistMessages,
   onApplyAndValidate,
   onClose,
+  onOpenSettings,
 }: ChatPanelProps) {
   const [agentStatus, setAgentStatus] = useState<'idle' | 'compiling' | 'repairing' | 'success' | 'error'>('idle');
   const [hasFailedOnce, setHasFailedOnce] = useState(false);
@@ -110,6 +120,11 @@ export default function ChatPanel({
   const appliedByToolInTurnRef = useRef(false);
   const latestIntentRef = useRef<'chat' | 'edit'>('chat');
   const autoToolLoopCountRef = useRef(0);
+  const hasLocalAiConfig = isLocalAIConfigReady(localAiConfig);
+  const requestScopedAiConfig = hasLocalAiConfig ? toRequestScopedAIConfig(localAiConfig) : undefined;
+  const providerLabel = hasLocalAiConfig
+    ? `${getLocalAIProviderLabel(localAiConfig.providerType)} · 本地 BYOK`
+    : '未配置本地 AI';
 
   const inferIntentFromText = useCallback((text: string): 'chat' | 'edit' => {
     const normalized = text.trim().toLowerCase();
@@ -220,6 +235,7 @@ export default function ChatPanel({
             trigger: options.trigger,
             messageId: options.messageId,
             metadata: options.requestMetadata,
+            byok: requestScopedAiConfig,
             context: {
               template_id: activeTemplateId,
               base_typst: currentCode,
@@ -290,7 +306,7 @@ export default function ChatPanel({
         </div>
         <div>
           <h1 className="font-bold text-sm text-slate-900 dark:text-white">DeepPrint AI</h1>
-          <p className="text-[10px] text-slate-400 dark:text-slate-500 font-medium">设计助手在线</p>
+          <p className="text-[10px] text-slate-400 dark:text-slate-500 font-medium">{providerLabel}</p>
         </div>
         <span className={`ml-auto mr-2 px-2 py-0.5 rounded-full text-[10px] font-medium ${agentStatus === 'compiling'
           ? 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300'
@@ -309,12 +325,37 @@ export default function ChatPanel({
           {agentStatus === 'idle' && '待命'}
         </span>
         <button
+          onClick={onOpenSettings}
+          className={`p-1.5 rounded hover:bg-slate-100 dark:hover:bg-slate-800 ${hasLocalAiConfig
+            ? 'text-emerald-500 dark:text-emerald-400'
+            : 'text-slate-400 dark:text-slate-500'
+            }`}
+          title={hasLocalAiConfig ? '本地 AI 已配置' : '配置本地 AI'}
+        >
+          <Settings2 size={18} />
+        </button>
+        <button
           onClick={onClose}
           className="p-1.5 rounded hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-400 dark:text-slate-500"
         >
           <PanelRightClose size={18} />
         </button>
       </div>
+
+      {!hasLocalAiConfig && (
+        <div className="border-b border-amber-100 bg-amber-50/80 px-4 py-3 text-[12px] text-amber-900 dark:border-amber-900/30 dark:bg-amber-950/20 dark:text-amber-100">
+          <p className="font-medium">还没配置本地 AI Key</p>
+          <p className="mt-1 text-[11px] opacity-90">
+            当前仅支持 Gemini 和 OpenAI-compatible。配置会保存在当前浏览器，真正请求时再临时发送给服务器代理使用。
+          </p>
+          <button
+            onClick={onOpenSettings}
+            className="mt-2 rounded-lg bg-amber-900 px-3 py-1.5 text-[11px] font-semibold text-white transition-colors hover:bg-amber-800 dark:bg-amber-200 dark:text-amber-950 dark:hover:bg-amber-100"
+          >
+            配置本地 AI
+          </button>
+        </div>
+      )}
 
       {agentStatus === 'error' && lastCompileDiagnostics?.message && (
         <div
@@ -335,8 +376,10 @@ export default function ChatPanel({
           <AssistantRuntimeProvider runtime={runtime}>
             <UpdateTypstTool />
             <Thread
-              inputDisabled={!activeTemplateId}
-              inputDisabledReason="请先在左侧选择一个模版，再和 AI 讨论或修改"
+              inputDisabled={!activeTemplateId || !hasLocalAiConfig}
+              inputDisabledReason={!activeTemplateId
+                ? '请先在左侧选择一个模版，再和 AI 讨论或修改'
+                : '请先配置本地 AI Key，再和 AI 讨论或修改'}
             />
           </AssistantRuntimeProvider>
         </TooltipProvider>
