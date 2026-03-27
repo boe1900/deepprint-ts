@@ -2,6 +2,8 @@ name = "deepprint-web"
 compatibility_date = "2026-02-05"
 compatibility_flags = ["nodejs_compat"]
 
+# Replace the D1 database values below with your own database before deploying
+# a separate copy of this project.
 
 [[d1_databases]]
 binding = "deepprint_auth"

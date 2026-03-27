@@ -9,6 +9,8 @@
     "dev:full": "npm run build && wrangler pages dev ./dist",
     "build": "npm run sync && tsc -b && vite build",
     "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "check": "npm run lint && npm run build",
     "preview": "wrangler pages dev ./dist",
     "deploy": "npm run build && wrangler pages deploy ./dist"
   },
