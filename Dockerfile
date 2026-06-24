@@ -17,5 +17,6 @@ COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/package.json ./package.json
 COPY --from=build /app/server ./server
 COPY --from=build /app/functions ./functions
+COPY --from=build /app/migrations-postgres ./migrations-postgres
 EXPOSE 3000
-CMD ["npm", "run", "start"]
+CMD ["sh", "-c", "npm run db:migrate && npm run start"]

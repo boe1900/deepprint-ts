@@ -119,6 +119,14 @@ docker compose up
 
 当前仍需单独启动 `typst-json-render`，并让 `TJR_RENDER_BASE_URL` 指向它。
 
+本地接口冒烟可以临时设置 `DEEPPRINT_DEV_AUTH=true`，再用 `x-deepprint-dev-user-id` 请求头模拟登录用户。不要在生产环境开启。
+
+服务启动后可跑：
+
+```bash
+npm run smoke
+```
+
 可用脚本：
 
 - `npm run dev`：前端开发模式
@@ -126,6 +134,7 @@ docker compose up
 - `npm run lint`：运行 ESLint
 - `npm run build`：同步 Typst 包、类型检查并打包
 - `npm run check`：执行 lint + build
+- `npm run smoke`：对 Node API、PostgreSQL、render 服务做最小冒烟
 
 ## 环境变量
 

@@ -27,6 +27,7 @@ export type Bindings = {
   TRIAL_LIMIT_EXEMPT_EMAILS?: string
   TJR_RENDER_BASE_URL?: string
   TJR_RENDER_API_KEY?: string
+  DEEPPRINT_DEV_AUTH?: string
 }
 
 export type Variables = {
@@ -37,6 +38,23 @@ export const app = new Hono<{ Bindings: Bindings; Variables: Variables }>().base
 
 // 鉴权中间件 - 需要登录的路由加上 requireAuth 即可
 const requireAuth = createMiddleware<{ Bindings: Bindings; Variables: Variables }>(async (c, next) => {
+  if (c.env.DEEPPRINT_DEV_AUTH === 'true') {
+    const userId = c.req.header('x-deepprint-dev-user-id') || 'dev-user'
+    await c.env.deepprint_auth
+      .prepare('INSERT INTO "user" ("id", "name", "email", "emailVerified", "createdAt", "updatedAt") VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT ("id") DO NOTHING')
+      .bind(userId, 'Dev User', `${userId}@local.test`, true, new Date().toISOString(), new Date().toISOString())
+      .run()
+    c.set('session', {
+      user: {
+        id: userId,
+        name: 'Dev User',
+        email: `${userId}@local.test`,
+      },
+    })
+    await next()
+    return
+  }
+
   const auth = createAuth(c.env, c.req.url)
   const session = await auth.api.getSession({ headers: c.req.raw.headers })
   if (!session) {

@@ -6,7 +6,9 @@
   "scripts": {
     "sync": "node scripts/update-universe.mjs",
     "dev": "npm run sync && vite",
-    "dev:full": "npm run build && tsx server/index.ts",
+    "dev:full": "npm run build && npm run db:migrate && tsx server/index.ts",
+    "db:migrate": "tsx server/migrate.ts",
+    "smoke": "node scripts/smoke.mjs",
     "start": "tsx server/index.ts",
     "build": "npm run sync && tsc -b && vite build",
     "lint": "eslint .",
