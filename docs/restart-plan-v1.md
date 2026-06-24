@@ -136,6 +136,8 @@ Use Docker Compose:
 
 Do not preserve Cloudflare compatibility while rewriting this path. It adds cost without helping the new architecture.
 
+Current migration note: until the Node/Hono API server replaces Cloudflare Pages Functions, `docker-compose.yml` only starts PostgreSQL and a static web container. Run `typst-json-render` separately on `localhost:8000`; `TJR_RENDER_BASE_URL` points to `host.docker.internal:8000` from Docker.
+
 ## 9. Database
 
 Replace D1 assumptions with PostgreSQL.

@@ -113,6 +113,15 @@ npm run dev
 npm run dev:full
 ```
 
+Docker/PostgreSQL 方向已经开始落地：
+
+```bash
+cp .env.example .env
+docker compose up db
+```
+
+当前过渡期仍需单独启动 `typst-json-render`，并让 `TJR_RENDER_BASE_URL` 指向它。Node/Hono API 替换 Cloudflare Pages Functions 是下一步。
+
 可用脚本：
 
 - `npm run dev`：前端开发模式
