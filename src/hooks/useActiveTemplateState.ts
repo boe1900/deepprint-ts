@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '@/lib/api-client';
+import { getBundleData, getBundleTemplate, toTemplateBundleFiles } from '@/lib/template-bundle';
 
 type ChatSeedMessage = { id?: string; role: string; parts: unknown[] };
 
@@ -51,8 +52,11 @@ export function useActiveTemplateState({
         return;
       }
 
-      setCode(detail.content || defaultCode);
-      setData(detail.mock_data && Object.keys(detail.mock_data).length > 0 ? detail.mock_data : defaultData);
+      const files = toTemplateBundleFiles(detail.files_json, detail.content || defaultCode, detail.mock_data || defaultData);
+      const nextCode = getBundleTemplate(files) || defaultCode;
+      const nextData = getBundleData(files);
+      setCode(nextCode);
+      setData(Object.keys(nextData).length > 0 ? nextData : defaultData);
       setChatSeedMessages(thread.messages.map((message) => ({
         id: message.id,
         role: message.role,

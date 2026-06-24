@@ -12,6 +12,7 @@ import { Thread } from '@/components/assistant-ui/thread';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { briefErrorText } from '@/lib/brief-error-text';
 import type { CompileFeedback } from '@/components/TypstPreview';
+import { DEFAULT_TEMPLATE_BUNDLE_FILES, getBundleData, getBundleTemplate, toTemplateBundleFiles, type TemplateBundleFiles } from '@/lib/template-bundle';
 import {
   getLocalAIProviderLabel,
   isLocalAIConfigReady,
@@ -57,15 +58,15 @@ const UpdateTypstToolCard: ToolCallMessagePartComponent<Record<string, unknown>,
   const isRunning = status?.type === 'running';
   const isComplete = status?.type === 'complete';
   const isError = status?.type === 'incomplete' || result?.ok === false;
-  let shortArgs: { typst_code?: string } | null = null;
+  let shortArgs: { files?: TemplateBundleFiles } | null = null;
   if (argsText) {
     try {
-      shortArgs = JSON.parse(argsText) as { typst_code?: string };
+      shortArgs = JSON.parse(argsText) as { files?: TemplateBundleFiles };
     } catch {
       shortArgs = null;
     }
   }
-  const codeLen = shortArgs?.typst_code?.length ?? 0;
+  const codeLen = shortArgs?.files?.['template.typ']?.length ?? 0;
 
   return (
     <div className="mx-auto w-full max-w-(--thread-max-width) px-2 py-2">
@@ -84,7 +85,7 @@ const UpdateTypstToolCard: ToolCallMessagePartComponent<Record<string, unknown>,
           </span>
         </div>
         <p className="mt-1 text-slate-500 dark:text-slate-400">
-          代码长度 {codeLen} 字符
+          template.typ 长度 {codeLen} 字符
         </p>
         {result?.error && (
           <p className="mt-1 text-red-600 dark:text-red-400" title={result.error}>
@@ -153,19 +154,18 @@ export default function ChatPanel({
   }, []);
 
   const UpdateTypstTool = useMemo(() => makeAssistantTool({
-    toolName: 'update_typst',
-    description: '应用并编译 Typst 模版代码。每次修改都要调用该工具。',
+    toolName: 'update_template_bundle',
+    description: '应用并编译完整 TemplateBundle files map。每次模板修改都要调用该工具。',
     parameters: {
       type: 'object',
       properties: {
-        typst_code: { type: 'string', description: '完整的 Typst 代码' },
-        mock_data: {
+        files: {
           type: 'object',
-          description: '与模板匹配的完整 mock 数据对象（必填）',
-          additionalProperties: true,
+          description: '完整 TemplateBundle 文件映射，必须包含 manifest.json、template.typ、data.json、data.schema.json',
+          additionalProperties: { type: 'string' },
         },
       },
-      required: ['typst_code', 'mock_data'],
+      required: ['files'],
       additionalProperties: false,
     },
     disabled: !activeTemplateId,
@@ -180,20 +180,21 @@ export default function ChatPanel({
         return { ok: false, error: '请先在左侧选择一个模版' };
       }
 
-      const rawCode = typeof args.typst_code === 'string' ? args.typst_code : '';
-      const fenced = rawCode.match(/```typst\s*([\s\S]*?)```/i) || rawCode.match(/```[a-zA-Z0-9_-]*\s*([\s\S]*?)```/i);
-      const nextCode = (fenced?.[1] || rawCode).trim();
-      const nextData = args.mock_data && typeof args.mock_data === 'object'
-        ? (args.mock_data as Record<string, unknown>)
-        : undefined;
+      const files = toTemplateBundleFiles(
+        args.files,
+        currentCode,
+        currentData,
+      );
+      const nextCode = getBundleTemplate(files).trim();
+      const nextData = getBundleData(files);
 
       if (!nextCode.trim()) {
         setAgentStatus('error');
-        return { ok: false, error: 'typst_code 不能为空' };
+        return { ok: false, error: 'template.typ 不能为空' };
       }
       if (!nextData || Object.keys(nextData).length === 0) {
         setAgentStatus('error');
-        return { ok: false, error: 'mock_data 不能为空，请同时返回与模板匹配的模拟数据' };
+        return { ok: false, error: 'data.json 不能为空，请同时返回与模板匹配的模拟数据' };
       }
 
       appliedByToolInTurnRef.current = true;
@@ -214,7 +215,7 @@ export default function ChatPanel({
       });
       return { ok: false, error: compileResult.error || '编译失败' };
     },
-  }), [activeTemplateId, hasFailedOnce, onApplyAndValidate]);
+  }), [activeTemplateId, currentCode, currentData, hasFailedOnce, onApplyAndValidate]);
 
   const runtime = useChatRuntime({
     messages: initialMessages as any,
@@ -238,8 +239,12 @@ export default function ChatPanel({
             byok: requestScopedAiConfig,
             context: {
               template_id: activeTemplateId,
-              base_typst: currentCode,
-              base_data: currentData,
+              base_typst: getBundleTemplate(toTemplateBundleFiles(undefined, currentCode, currentData)),
+              base_data: getBundleData({
+                ...DEFAULT_TEMPLATE_BUNDLE_FILES,
+                'template.typ': currentCode,
+                'data.json': JSON.stringify(currentData, null, 2),
+              }),
               intent: latestIntentRef.current,
               available_fonts: AVAILABLE_FONT_FAMILIES,
               available_plugins: AVAILABLE_PLUGIN_SPECS,

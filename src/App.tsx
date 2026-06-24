@@ -24,6 +24,7 @@ import {
   saveLocalAIConfig,
   type LocalAIConfig,
 } from '@/lib/local-ai-config';
+import { toTemplateBundleFiles } from '@/lib/template-bundle';
 
 // Auth
 import { authClient } from '@/lib/auth-client';
@@ -269,6 +270,7 @@ export default function DeepPrintStudio() {
       await api.updateTemplate(activeTemplateId, {
         content: code,
         mock_data: data,
+        files_json: toTemplateBundleFiles(undefined, code, data),
         update_source: 'manual',
         update_summary: '手动保存',
       });
@@ -361,6 +363,7 @@ export default function DeepPrintStudio() {
         await api.updateTemplate(activeTemplateId, {
           content: nextCode,
           mock_data: mergedData,
+          files_json: toTemplateBundleFiles(undefined, nextCode, mergedData),
           update_source: 'ai',
           update_summary: 'AI 应用模板修改',
         });

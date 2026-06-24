@@ -5,6 +5,8 @@ import { convertToModelMessages, jsonSchema, stepCountIs, streamText } from 'ai'
 import { createAuth } from '../lib/auth'
 import { resolveModelFromConfig, resolveModelFromEnv } from '../lib/ai-provider'
 import { evaluateTrialGenerationLimit, recordSuccessfulGeneration } from '../lib/trial-generation-limit'
+import { compileTemplateBundle, validateTemplateBundle } from '../lib/render-client'
+import { normalizeTemplateBundleFiles, type RenderFormat, type TemplateBundleFiles } from '../lib/template-bundle'
 import { D1Database } from '@cloudflare/workers-types'
 
 type Bindings = {
@@ -24,6 +26,8 @@ type Bindings = {
   TRIAL_SUCCESSFUL_GENERATIONS_PER_24H?: string
   TRIAL_SUCCESSFUL_GENERATION_DEDUP_MINUTES?: string
   TRIAL_LIMIT_EXEMPT_EMAILS?: string
+  TJR_RENDER_BASE_URL?: string
+  TJR_RENDER_API_KEY?: string
 }
 
 type Variables = {
@@ -52,15 +56,15 @@ app.on(['GET', 'POST'], '/auth/*', (c) => {
 const TYPST_SYSTEM_PROMPT = `你是 DeepPrint 的 Typst 模版编辑 Agent。
 
 工作方式：
-1. 只有在用户明确要求“修改/生成/应用模版”时，才调用工具 \`update_typst\`。
+1. 只有在用户明确要求“修改/生成/应用模版”时，才调用工具 \`update_template_bundle\`。
 2. 当不需要修改时，只进行自然中文对话，不能调用工具。
-3. 每次修改都提交完整 Typst 代码。
+3. 每次修改都提交完整 TemplateBundle files map，至少包含 manifest.json、template.typ、data.json、data.schema.json。
 4. 工具结果会返回编译结果：
    - \`ok=true\`：编译成功，可以给出简短说明并结束。
-   - \`ok=false\`：必须根据 \`error\` 继续修复并再次调用 \`update_typst\`。
-5. 每次调用 \`update_typst\` 都必须同时提供完整 \`mock_data\`，且字段与模板一致。
+   - \`ok=false\`：必须根据 \`error\` 继续修复并再次调用 \`update_template_bundle\`。
+5. data.json 是完整模拟数据，字段必须与 data.schema.json 和 template.typ 一致。
 6. 优先保留用户已有结构，仅修改用户要求的部分。
-7. 字段来自 \`data\` 变量，请确保代码可编译。
+7. template.typ 通过 \`#let data = json("data.json")\` 读取数据，请确保代码可编译。
 
 输出风格：
 - 纯咨询时，直接回答问题，不输出代码块。
@@ -99,6 +103,37 @@ app.get('/health', (c) => {
   return c.json({ status: 'ok', timestamp: new Date().toISOString() })
 })
 
+app.post('/render/validate', requireAuth, async (c) => {
+  try {
+    const body = await c.req.json<RenderApiRequest>()
+    const files = normalizeTemplateBundleFiles(body.files)
+    const result = await validateTemplateBundle(c.env, {
+      files,
+      data_json: body.data_json,
+      format: body.format || 'png',
+    })
+    return c.json(result)
+  } catch (error) {
+    return c.json({ ok: false, error: error instanceof Error ? error.message : 'Render validate failed' }, 400)
+  }
+})
+
+app.post('/render/compile', requireAuth, async (c) => {
+  try {
+    const body = await c.req.json<RenderApiRequest>()
+    const files = normalizeTemplateBundleFiles(body.files)
+    const result = await compileTemplateBundle(c.env, {
+      files,
+      data_json: body.data_json,
+      format: body.format || 'png',
+      include_artifact_base64: body.include_artifact_base64 ?? true,
+    })
+    return c.json(result)
+  } catch (error) {
+    return c.json({ ok: false, error: error instanceof Error ? error.message : 'Render compile failed' }, 400)
+  }
+})
+
 type ClientToolSchema = {
   description?: string
   parameters?: unknown
@@ -133,8 +168,16 @@ type TemplateRow = {
   name: string
   content: string
   mock_data: string
+  files_json?: string
   status: string
   updated_at: number
+}
+
+type RenderApiRequest = {
+  files?: TemplateBundleFiles
+  data_json?: string
+  format?: RenderFormat
+  include_artifact_base64?: boolean
 }
 
 const parseMockData = (raw: unknown): Record<string, unknown> => {
@@ -147,6 +190,18 @@ const parseMockData = (raw: unknown): Record<string, unknown> => {
     return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
       ? parsed as Record<string, unknown>
       : {}
+  } catch {
+    return {}
+  }
+}
+
+const parseFilesJson = (raw: unknown): TemplateBundleFiles => {
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+    return normalizeTemplateBundleFiles(raw)
+  }
+  if (typeof raw !== 'string') return {}
+  try {
+    return normalizeTemplateBundleFiles(JSON.parse(raw))
   } catch {
     return {}
   }
@@ -232,24 +287,32 @@ const createTemplateVersionIfChanged = async (params: {
   templateId: string
   content: string
   mockDataString: string
+  filesJsonString?: string
   source: 'ai' | 'manual' | 'rollback'
   summary?: string
 }) => {
-  const { db, userId, templateId, content, mockDataString, source, summary } = params
+  const { db, userId, templateId, content, mockDataString, filesJsonString, source, summary } = params
   const latest = await db
-    .prepare('SELECT content, mock_data FROM template_versions WHERE user_id = ? AND template_id = ? ORDER BY created_at DESC LIMIT 1')
+    .prepare('SELECT content, mock_data, files_json FROM template_versions WHERE user_id = ? AND template_id = ? ORDER BY created_at DESC LIMIT 1')
     .bind(userId, templateId)
-    .first<{ content: string; mock_data: string }>()
+    .first<{ content: string; mock_data: string; files_json?: string }>()
 
-  if (latest && latest.content === content && latest.mock_data === mockDataString) {
+  if (latest && latest.content === content && latest.mock_data === mockDataString && (latest.files_json || '') === (filesJsonString || '')) {
     return null
   }
 
   const versionId = crypto.randomUUID()
-  await db
-    .prepare('INSERT INTO template_versions (id, user_id, template_id, content, mock_data, source, summary) VALUES (?, ?, ?, ?, ?, ?, ?)')
-    .bind(versionId, userId, templateId, content, mockDataString, source, (summary || '').trim())
-    .run()
+  if (filesJsonString !== undefined) {
+    await db
+      .prepare('INSERT INTO template_versions (id, user_id, template_id, content, mock_data, files_json, source, summary) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+      .bind(versionId, userId, templateId, content, mockDataString, filesJsonString, source, (summary || '').trim())
+      .run()
+  } else {
+    await db
+      .prepare('INSERT INTO template_versions (id, user_id, template_id, content, mock_data, source, summary) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .bind(versionId, userId, templateId, content, mockDataString, source, (summary || '').trim())
+      .run()
+  }
 
   return versionId
 }
@@ -556,7 +619,7 @@ app.get('/templates/:id', requireAuth, async (c) => {
     mockData = {}
   }
 
-  return c.json({ ...result, mock_data: mockData })
+  return c.json({ ...result, mock_data: mockData, files_json: parseFilesJson((result as any).files_json) })
 })
 
 // GET /templates/:id/ai-thread — 获取模板维度会话
@@ -710,15 +773,15 @@ app.post('/templates/:id/versions/:versionId/restore', requireAuth, async (c) =>
   if (!template) return c.json({ error: '模版不存在' }, 404)
 
   const targetVersion = await db
-    .prepare('SELECT id, content, mock_data FROM template_versions WHERE id = ? AND user_id = ? AND template_id = ?')
+    .prepare('SELECT id, content, mock_data, files_json FROM template_versions WHERE id = ? AND user_id = ? AND template_id = ?')
     .bind(versionId, userId, templateId)
-    .first<{ id: string; content: string; mock_data: string }>()
+    .first<{ id: string; content: string; mock_data: string; files_json?: string }>()
   if (!targetVersion) return c.json({ error: '版本不存在' }, 404)
 
   const now = Math.floor(Date.now() / 1000)
   await db
-    .prepare('UPDATE templates SET content = ?, mock_data = ?, updated_at = ? WHERE id = ? AND user_id = ?')
-    .bind(targetVersion.content, targetVersion.mock_data, now, templateId, userId)
+    .prepare('UPDATE templates SET content = ?, mock_data = ?, files_json = ?, updated_at = ? WHERE id = ? AND user_id = ?')
+    .bind(targetVersion.content, targetVersion.mock_data, targetVersion.files_json || '{}', now, templateId, userId)
     .run()
 
   await createTemplateVersionIfChanged({
@@ -727,6 +790,7 @@ app.post('/templates/:id/versions/:versionId/restore', requireAuth, async (c) =>
     templateId,
     content: targetVersion.content,
     mockDataString: targetVersion.mock_data,
+    filesJsonString: targetVersion.files_json || '{}',
     source: 'rollback',
     summary: `回滚到版本 ${versionId}`,
   })
@@ -735,6 +799,7 @@ app.post('/templates/:id/versions/:versionId/restore', requireAuth, async (c) =>
     success: true,
     content: targetVersion.content,
     mock_data: parseMockData(targetVersion.mock_data),
+    files_json: parseFilesJson(targetVersion.files_json),
   })
 })
 
@@ -747,6 +812,7 @@ app.put('/templates/:id', requireAuth, async (c) => {
     name?: string
     content?: string
     mock_data?: Record<string, unknown>
+    files_json?: TemplateBundleFiles
     status?: string
     update_source?: 'ai' | 'manual' | 'rollback'
     update_summary?: string
@@ -755,7 +821,7 @@ app.put('/templates/:id', requireAuth, async (c) => {
 
   // 检查模版存在且属于当前用户
   const existing = await db
-    .prepare('SELECT id, folder_id, content, mock_data FROM templates WHERE id = ? AND user_id = ?')
+    .prepare('SELECT id, folder_id, content, mock_data, files_json FROM templates WHERE id = ? AND user_id = ?')
     .bind(templateId, userId)
     .first<TemplateRow>()
 
@@ -768,8 +834,13 @@ app.put('/templates/:id', requireAuth, async (c) => {
   const nextMockDataString = body.mock_data !== undefined
     ? JSON.stringify(body.mock_data)
     : (existing.mock_data || '{}')
+  const nextFilesJsonString = body.files_json !== undefined
+    ? JSON.stringify(body.files_json)
+    : (existing.files_json || '')
   const contentOrDataChanged =
-    nextContent !== existing.content || nextMockDataString !== (existing.mock_data || '{}')
+    nextContent !== existing.content
+    || nextMockDataString !== (existing.mock_data || '{}')
+    || nextFilesJsonString !== (existing.files_json || '')
   const shouldTrackSuccessfulAiGeneration =
     contentOrDataChanged && body.update_source === 'ai'
 
@@ -803,6 +874,7 @@ app.put('/templates/:id', requireAuth, async (c) => {
   }
   if (body.content !== undefined) { sets.push('content = ?'); values.push(body.content) }
   if (body.mock_data !== undefined) { sets.push('mock_data = ?'); values.push(nextMockDataString) }
+  if (body.files_json !== undefined) { sets.push('files_json = ?'); values.push(nextFilesJsonString) }
   if (body.status !== undefined) { sets.push('status = ?'); values.push(body.status) }
 
   if (sets.length === 0) return c.json({ error: '没有需要更新的字段' }, 400)
@@ -824,6 +896,7 @@ app.put('/templates/:id', requireAuth, async (c) => {
       templateId,
       content: nextContent,
       mockDataString: nextMockDataString,
+      filesJsonString: nextFilesJsonString || undefined,
       source: body.update_source || 'manual',
       summary: body.update_summary || '',
     })

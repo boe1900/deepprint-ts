@@ -4,6 +4,8 @@ DeepPrint TS 是一个面向 Typst 模板生产的实验性工作台：你可以
 
 项目状态：`alpha / experimental`
 
+> 新开发路线已经切到 Docker + PostgreSQL + `typst-json-render` 渲染服务。旧的 Cloudflare/D1/浏览器 Typst 编译路径会被替换。详见 [DeepPrint TS Restart Plan V1](./docs/restart-plan-v1.md)。
+
 ## 它现在已经能做什么
 
 - 管理业务分组与模板
@@ -69,6 +71,8 @@ cp .dev.vars.example .dev.vars
 - `AI_BASE_URL`（可选，仅 OpenAI-compatible provider 需要）
 - `AI_MODEL`（可选）
 - `AI_API_MODE`（可选）
+- `TJR_RENDER_BASE_URL`（必填，指向本地或远程 `typst-json-render` 服务）
+- `TJR_RENDER_API_KEY`（可选，对应 render 服务的 Bearer token）
 - `TRIAL_LIMIT_ENABLED`（可选，开启试用成品额度限制）
 - `TRIAL_SUCCESSFUL_GENERATIONS_PER_24H`（可选）
 - `TRIAL_SUCCESSFUL_GENERATION_DEDUP_MINUTES`（可选）
@@ -90,6 +94,7 @@ wrangler d1 execute deepprint-auth --local --file=./migrations/0001_auth.sql
 wrangler d1 execute deepprint-auth --local --file=./migrations/0002_deepprint_schema.sql
 wrangler d1 execute deepprint-auth --local --file=./migrations/0003_ai_threads_and_template_versions.sql
 wrangler d1 execute deepprint-auth --local --file=./migrations/0004_trial_generation_limits.sql
+wrangler d1 execute deepprint-auth --local --file=./migrations/0005_template_bundle_files.sql
 ```
 
 如果你准备部署自己的实例，请把 `wrangler.toml` 里的 D1 配置替换成你自己的数据库信息。
@@ -133,6 +138,11 @@ npm run dev:full
 - `AI_BASE_URL`：`openai` 必填，例如 DeepSeek / GLM / Ark 的兼容接口地址
 - `AI_MODEL`：可选，默认 `google: gemini-flash-latest`，`openai: gpt-4o-mini`
 - `AI_API_MODE`：仅 `openai` 生效，`chat | responses`，默认 `chat`
+
+### Render 服务
+
+- `TJR_RENDER_BASE_URL`：`typst-json-render` 服务地址，例如 `http://127.0.0.1:8000`
+- `TJR_RENDER_API_KEY`：可选。如果 render 服务配置了 API key，这里填写同一个 token
 
 ### 兼容字段
 

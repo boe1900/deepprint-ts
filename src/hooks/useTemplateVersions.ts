@@ -1,6 +1,7 @@
 import { type RefObject, useCallback, useState } from 'react';
 import { api, type TemplateVersion } from '@/lib/api-client';
 import { type TypstPreviewRef } from '@/components/TypstPreview';
+import { getBundleData, getBundleTemplate, toTemplateBundleFiles } from '@/lib/template-bundle';
 
 interface UseTemplateVersionsParams {
   activeTemplateId: string;
@@ -49,11 +50,12 @@ export function useTemplateVersions({
     setIsRestoringVersion(true);
     try {
       const restored = await api.restoreTemplateVersion(activeTemplateId, versionId);
-      const nextCode = restored.content || defaultCode;
-      const nextData = restored.mock_data && Object.keys(restored.mock_data).length > 0 ? restored.mock_data : defaultData;
+      const files = toTemplateBundleFiles(restored.files_json, restored.content || defaultCode, restored.mock_data || defaultData);
+      const nextCode = getBundleTemplate(files) || defaultCode;
+      const nextData = getBundleData(files);
 
       setCode(nextCode);
-      setData(nextData);
+      setData(Object.keys(nextData).length > 0 ? nextData : defaultData);
 
       if (previewRef.current) {
         await previewRef.current.compileAndGetError(nextCode, nextData, true);

@@ -1,5 +1,7 @@
 // ─── Types matching D1 schema ────────────────────────────────────────────────
 
+import type { TemplateBundleFiles, TemplateStatus } from './template-bundle'
+
 export interface Folder {
     id: string
     name: string
@@ -11,13 +13,14 @@ export interface Template {
     id: string
     folder_id: string
     name: string
-    status: 'draft' | 'active'
+    status: TemplateStatus | 'active'
     updated_at: number
 }
 
 export interface TemplateDetail extends Template {
     content: string
     mock_data: Record<string, unknown>
+    files_json?: TemplateBundleFiles
     user_id: string
 }
 
@@ -48,6 +51,28 @@ export interface TemplateVersion {
     source: 'ai' | 'manual' | 'rollback' | string
     summary: string
     created_at: number
+}
+
+export type RenderFormat = 'png' | 'pdf'
+
+export interface RenderValidateResult {
+    ok: true
+    manifest: unknown
+    compile_checked: boolean
+    artifact_returned: false
+}
+
+export interface RenderCompileResult {
+    ok: true
+    manifest: unknown
+    artifact_id: string
+    artifact_format: RenderFormat
+    artifact_name: string
+    artifact_mime_type: string
+    artifact_path: string
+    artifact_bytes: number
+    artifact_sha256: string
+    artifact_base64?: string
 }
 
 // ─── API Error ───────────────────────────────────────────────────────────────
@@ -132,6 +157,7 @@ export const api = {
             name: string
             content: string
             mock_data: Record<string, unknown>
+            files_json: TemplateBundleFiles
             status: string
             update_source: 'ai' | 'manual' | 'rollback'
             update_summary: string
@@ -176,10 +202,32 @@ export const api = {
     async restoreTemplateVersion(
         templateId: string,
         versionId: string
-    ): Promise<{ success: boolean; content: string; mock_data: Record<string, unknown> }> {
-        return request<{ success: boolean; content: string; mock_data: Record<string, unknown> }>(
+    ): Promise<{ success: boolean; content: string; mock_data: Record<string, unknown>; files_json?: TemplateBundleFiles }> {
+        return request<{ success: boolean; content: string; mock_data: Record<string, unknown>; files_json?: TemplateBundleFiles }>(
             `/api/templates/${templateId}/versions/${versionId}/restore`,
             { method: 'POST' },
         )
+    },
+
+    /** 通过 typst-json-render 校验 TemplateBundle */
+    async validateTemplateBundle(
+        files: TemplateBundleFiles,
+        options: { data_json?: string; format?: RenderFormat } = {},
+    ): Promise<RenderValidateResult> {
+        return request<RenderValidateResult>('/api/render/validate', {
+            method: 'POST',
+            body: JSON.stringify({ files, ...options }),
+        })
+    },
+
+    /** 通过 typst-json-render 编译 TemplateBundle，默认返回 PNG base64 预览 */
+    async compileTemplateBundle(
+        files: TemplateBundleFiles,
+        options: { data_json?: string; format?: RenderFormat; include_artifact_base64?: boolean } = {},
+    ): Promise<RenderCompileResult> {
+        return request<RenderCompileResult>('/api/render/compile', {
+            method: 'POST',
+            body: JSON.stringify({ files, include_artifact_base64: true, ...options }),
+        })
     },
 }

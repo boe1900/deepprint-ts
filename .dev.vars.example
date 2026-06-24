@@ -17,6 +17,10 @@ AI_MODEL=gemini-flash-latest
 # AI_PROVIDER=openai
 # GOOGLE_GENERATIVE_AI_API_KEY=
 
+# typst-json-render service
+TJR_RENDER_BASE_URL=http://127.0.0.1:8000
+# TJR_RENDER_API_KEY=dev-token
+
 # Trial limits (optional)
 TRIAL_LIMIT_ENABLED=false
 TRIAL_SUCCESSFUL_GENERATIONS_PER_24H=5
