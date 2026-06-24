@@ -13,7 +13,9 @@ FROM node:24-alpine
 WORKDIR /app
 ENV NODE_ENV=production
 COPY --from=build /app/dist ./dist
+COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/package.json ./package.json
-RUN npm i -g serve@14
+COPY --from=build /app/server ./server
+COPY --from=build /app/functions ./functions
 EXPOSE 3000
-CMD ["serve", "-s", "dist", "-l", "3000"]
+CMD ["npm", "run", "start"]

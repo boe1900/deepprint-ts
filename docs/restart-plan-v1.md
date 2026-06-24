@@ -136,7 +136,7 @@ Use Docker Compose:
 
 Do not preserve Cloudflare compatibility while rewriting this path. It adds cost without helping the new architecture.
 
-Current migration note: until the Node/Hono API server replaces Cloudflare Pages Functions, `docker-compose.yml` only starts PostgreSQL and a static web container. Run `typst-json-render` separately on `localhost:8000`; `TJR_RENDER_BASE_URL` points to `host.docker.internal:8000` from Docker.
+Current migration note: `docker-compose.yml` runs the Node/Hono web container and PostgreSQL. Run `typst-json-render` separately on `localhost:8000`; `TJR_RENDER_BASE_URL` points to `host.docker.internal:8000` from Docker.
 
 ## 9. Database
 
@@ -165,7 +165,7 @@ Replace:
 - D1 migrations with PostgreSQL migrations
 - Wrangler runtime with a Node server runtime
 
-Delete later, once replacements are working:
+Deleted in the restart path:
 
 - Cloudflare-only glue
 - D1-only Kysely adapter
@@ -180,6 +180,6 @@ Delete later, once replacements are working:
 4. Add backend validate/compile endpoints.
 5. Replace preview UI to load PNG from backend.
 6. Replace AI tool with `update_template_bundle`.
-7. Remove Cloudflare/D1/browser-compiler code after the new path works.
+7. Keep removing leftover Cloudflare/D1/browser-compiler references when they appear.
 
 Keep each step runnable. Delete old code only after the replacement is live.

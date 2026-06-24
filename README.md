@@ -4,7 +4,7 @@ DeepPrint TS 是一个面向 Typst 模板生产的实验性工作台：你可以
 
 项目状态：`alpha / experimental`
 
-> 新开发路线已经切到 Docker + PostgreSQL + `typst-json-render` 渲染服务。旧的 Cloudflare/D1/浏览器 Typst 编译路径会被替换。详见 [DeepPrint TS Restart Plan V1](./docs/restart-plan-v1.md)。
+> 新开发路线已经切到 Docker + PostgreSQL + `typst-json-render` 渲染服务。详见 [DeepPrint TS Restart Plan V1](./docs/restart-plan-v1.md)。
 
 ## 它现在已经能做什么
 
@@ -13,7 +13,7 @@ DeepPrint TS 是一个面向 Typst 模板生产的实验性工作台：你可以
 - 使用 Typst Web 编译器做实时预览
 - 通过 AI 对话修改当前模板，并把成功应用的变更写回数据库
 - 为模板保存 AI 会话和历史版本，支持回滚
-- 运行在 Cloudflare Pages Functions + D1 上
+- 运行在 Node/Hono + PostgreSQL 上
 
 ## 为什么开源
 
@@ -22,15 +22,15 @@ DeepPrint TS 是一个面向 Typst 模板生产的实验性工作台：你可以
 - 想研究 Typst 在线编辑器怎么做
 - 想做垂直文档/票据/标签/条码模板工具
 - 想把 AI 编辑体验接进现有模板系统
-- 想在 Cloudflare Pages + D1 上快速搭一个全栈应用
+- 想用 Docker + PostgreSQL 快速搭一个 AI 模板产品原型
 
 如果你期待的是一个稳定、抽象完善、接口长期兼容的框架，这个项目现在还没到那个阶段。
 
 ## 技术栈
 
 - React 19 + Vite + TypeScript
-- Hono + Cloudflare Pages Functions
-- Cloudflare D1
+- Hono + Node server
+- PostgreSQL
 - Better Auth（GitHub 登录）
 - Typst Web Compiler / Renderer
 - AI SDK（Google 与 OpenAI-compatible provider）
@@ -85,19 +85,16 @@ cp .dev.vars.example .dev.vars
 - 如果只想体验模板编辑和预览，不使用 AI，可以不填 AI 相关变量。
 - 如果你想保留一个“服务端默认 AI”兜底，也可以继续填写 AI 环境变量。
 
-### 4. 初始化本地 D1
+### 4. 初始化 PostgreSQL
 
-本项目目前提供的是 SQL migration 文件，按顺序执行即可：
+推荐直接用 Docker 启动数据库，首次启动会自动执行 `migrations-postgres/`：
 
 ```bash
-wrangler d1 execute deepprint-auth --local --file=./migrations/0001_auth.sql
-wrangler d1 execute deepprint-auth --local --file=./migrations/0002_deepprint_schema.sql
-wrangler d1 execute deepprint-auth --local --file=./migrations/0003_ai_threads_and_template_versions.sql
-wrangler d1 execute deepprint-auth --local --file=./migrations/0004_trial_generation_limits.sql
-wrangler d1 execute deepprint-auth --local --file=./migrations/0005_template_bundle_files.sql
+cp .env.example .env
+docker compose up db
 ```
 
-如果你准备部署自己的实例，请把 `wrangler.toml` 里的 D1 配置替换成你自己的数据库信息。
+如果你不用 Docker，也可以手动创建 PostgreSQL 数据库后执行 `migrations-postgres/0001_initial.sql`。
 
 ### 5. 启动开发环境
 
@@ -113,23 +110,22 @@ npm run dev
 npm run dev:full
 ```
 
-Docker/PostgreSQL 方向已经开始落地：
+Docker 方式：
 
 ```bash
 cp .env.example .env
-docker compose up db
+docker compose up
 ```
 
-当前过渡期仍需单独启动 `typst-json-render`，并让 `TJR_RENDER_BASE_URL` 指向它。Node/Hono API 替换 Cloudflare Pages Functions 是下一步。
+当前仍需单独启动 `typst-json-render`，并让 `TJR_RENDER_BASE_URL` 指向它。
 
 可用脚本：
 
 - `npm run dev`：前端开发模式
-- `npm run dev:full`：构建后用 Wrangler 启动完整应用
+- `npm run dev:full`：构建后启动 Node/Hono 完整应用
 - `npm run lint`：运行 ESLint
 - `npm run build`：同步 Typst 包、类型检查并打包
 - `npm run check`：执行 lint + build
-- `npm run deploy`：部署到 Cloudflare Pages
 
 ## 环境变量
 
@@ -228,8 +224,9 @@ AI_API_MODE=chat
 
 ```text
 src/                    前端应用
-functions/              Cloudflare Pages Functions API
-migrations/             D1 schema 与迁移脚本
+functions/              Hono API 源码
+server/                 Node server 与 PostgreSQL 适配
+migrations-postgres/    PostgreSQL schema
 scripts/update-universe.mjs
 public/fonts/           Typst 预览需要的字体资源
 typst-packages.json     需要同步的 Typst Universe 包清单

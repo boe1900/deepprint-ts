@@ -1,5 +1,4 @@
 import { Hono } from 'hono'
-import { handle } from 'hono/cloudflare-pages'
 import { createMiddleware } from 'hono/factory'
 import { convertToModelMessages, jsonSchema, stepCountIs, streamText } from 'ai'
 import { createAuth } from '../lib/auth'
@@ -7,10 +6,10 @@ import { resolveModelFromConfig, resolveModelFromEnv } from '../lib/ai-provider'
 import { evaluateTrialGenerationLimit, recordSuccessfulGeneration } from '../lib/trial-generation-limit'
 import { compileTemplateBundle, validateTemplateBundle } from '../lib/render-client'
 import { normalizeTemplateBundleFiles, type RenderFormat, type TemplateBundleFiles } from '../lib/template-bundle'
-import { D1Database } from '@cloudflare/workers-types'
+import type { AppDatabase } from '../lib/db-types'
 
-type Bindings = {
-  deepprint_auth: D1Database
+export type Bindings = {
+  deepprint_auth: AppDatabase
   AI_PROVIDER_TYPE?: string
   AI_PROVIDER?: string
   AI_API_KEY?: string
@@ -30,11 +29,11 @@ type Bindings = {
   TJR_RENDER_API_KEY?: string
 }
 
-type Variables = {
+export type Variables = {
   session: { user: { id: string; name: string; email: string; image?: string | null } }
 }
 
-const app = new Hono<{ Bindings: Bindings; Variables: Variables }>().basePath('/api')
+export const app = new Hono<{ Bindings: Bindings; Variables: Variables }>().basePath('/api')
 
 // 鉴权中间件 - 需要登录的路由加上 requireAuth 即可
 const requireAuth = createMiddleware<{ Bindings: Bindings; Variables: Variables }>(async (c, next) => {
@@ -282,7 +281,7 @@ const parseRequestScopedAIConfig = (raw?: RequestScopedAIConfig) => {
 }
 
 const createTemplateVersionIfChanged = async (params: {
-  db: D1Database
+  db: AppDatabase
   userId: string
   templateId: string
   content: string
@@ -459,12 +458,12 @@ app.get('/folders', requireAuth, async (c) => {
   const folders = await db
     .prepare('SELECT id, name, sort_order, created_at FROM folders WHERE user_id = ? ORDER BY sort_order ASC, created_at ASC')
     .bind(userId)
-    .all()
+    .all<any>()
 
   const templates = await db
     .prepare('SELECT id, folder_id, name, status, updated_at FROM templates WHERE user_id = ? ORDER BY updated_at DESC')
     .bind(userId)
-    .all()
+    .all<any>()
 
   // 按 folder_id 分组
   const templatesByFolder: Record<string, any[]> = {}
@@ -557,7 +556,7 @@ app.delete('/folders/:id', requireAuth, async (c) => {
   const countResult = await db
     .prepare('SELECT COUNT(1) as cnt FROM templates WHERE folder_id = ? AND user_id = ?')
     .bind(folderId, userId)
-    .first()
+    .first<{ cnt: number | string }>()
 
   const count = (countResult?.cnt as number) || 0
   if (count > 0) {
@@ -607,7 +606,7 @@ app.get('/templates/:id', requireAuth, async (c) => {
   const result = await db
     .prepare('SELECT * FROM templates WHERE id = ? AND user_id = ?')
     .bind(templateId, userId)
-    .first()
+    .first<{ mock_data?: string; files_json?: string } & Record<string, unknown>>()
 
   if (!result) return c.json({ error: '模版不存在' }, 404)
 
@@ -930,7 +929,7 @@ app.delete('/templates/:id', requireAuth, async (c) => {
   const threadRows = await db
     .prepare('SELECT id FROM ai_threads WHERE user_id = ? AND template_id = ?')
     .bind(userId, templateId)
-    .all()
+    .all<{ id: string }>()
 
   for (const row of threadRows.results) {
     const threadId = row.id as string
@@ -962,5 +961,3 @@ app.delete('/templates/:id', requireAuth, async (c) => {
 
   return c.json({ success: true })
 })
-
-export const onRequest = handle(app)

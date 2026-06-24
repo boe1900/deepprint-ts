@@ -1,4 +1,4 @@
-import { D1Database } from '@cloudflare/workers-types'
+import type { AppDatabase } from './db-types'
 
 export interface TrialGenerationLimitEnv {
   TRIAL_LIMIT_ENABLED?: string
@@ -8,7 +8,7 @@ export interface TrialGenerationLimitEnv {
 }
 
 interface EvaluateTrialGenerationLimitParams {
-  db: D1Database
+  db: AppDatabase
   env: TrialGenerationLimitEnv
   templateId: string
   userEmail?: string | null
@@ -16,7 +16,7 @@ interface EvaluateTrialGenerationLimitParams {
 }
 
 interface RecordSuccessfulGenerationParams {
-  db: D1Database
+  db: AppDatabase
   templateId: string
   userId: string
 }

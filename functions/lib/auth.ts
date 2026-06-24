@@ -1,9 +1,9 @@
 import { betterAuth } from 'better-auth'
-import { Kysely } from 'kysely'
-import { D1Dialect } from 'kysely-d1'
+import { Kysely, PostgresDialect } from 'kysely'
+import { Pool } from 'pg'
 
 interface AuthEnv {
-    deepprint_auth: D1Database
+    DATABASE_URL?: string
     GITHUB_CLIENT_ID: string
     GITHUB_CLIENT_SECRET: string
     BETTER_AUTH_SECRET: string
@@ -11,8 +11,12 @@ interface AuthEnv {
 }
 
 export function createAuth(env: AuthEnv, requestURL?: string) {
+    const databaseUrl = env.DATABASE_URL
+    if (!databaseUrl) {
+        throw new Error('DATABASE_URL is required')
+    }
     const db = new Kysely({
-        dialect: new D1Dialect({ database: env.deepprint_auth }),
+        dialect: new PostgresDialect({ pool: new Pool({ connectionString: databaseUrl }) }),
     })
 
     // 从请求 URL 或环境变量动态获取 baseURL
@@ -22,7 +26,7 @@ export function createAuth(env: AuthEnv, requestURL?: string) {
     return betterAuth({
         database: {
             db,
-            type: 'sqlite',
+            type: 'postgres',
         },
         secret: env.BETTER_AUTH_SECRET,
         ...(baseURL ? { baseURL } : {}),
