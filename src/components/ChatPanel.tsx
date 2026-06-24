@@ -124,7 +124,7 @@ export default function ChatPanel({
   const hasLocalAiConfig = isLocalAIConfigReady(localAiConfig);
   const requestScopedAiConfig = hasLocalAiConfig ? toRequestScopedAIConfig(localAiConfig) : undefined;
   const providerLabel = hasLocalAiConfig
-    ? `${getLocalAIProviderLabel(localAiConfig.providerType)} · 本地 BYOK`
+    ? `${getLocalAIProviderLabel(localAiConfig.providerType)} · 本地用户 Key`
     : '未配置本地 AI';
 
   const inferIntentFromText = useCallback((text: string): 'chat' | 'edit' => {

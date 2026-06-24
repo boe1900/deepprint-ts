@@ -81,7 +81,7 @@ cp .dev.vars.example .dev.vars
 说明：
 
 - `BETTER_AUTH_URL` 不填也可以；本地开发时会从请求 URL 自动推断。
-- 现在默认推荐使用“本地 BYOK”模式：用户在浏览器里自行配置 Gemini 或 OpenAI-compatible 的 `API Key`，配置只保存在当前浏览器。
+- 现在默认推荐使用“本地用户 Key”模式：用户在浏览器里自行配置 Gemini 或 OpenAI-compatible 的 `API Key`，配置只保存在当前浏览器。
 - 如果只想体验模板编辑和预览，不使用 AI，可以不填 AI 相关变量。
 - 如果你想保留一个“服务端默认 AI”兜底，也可以继续填写 AI 环境变量。
 
@@ -124,7 +124,7 @@ npm run dev:full
 
 ## 环境变量
 
-### 本地 BYOK
+### 本地用户 Key
 
 - 前端提供本地 AI 设置弹窗，当前支持 `Gemini` 与 `OpenAI-compatible`
 - 用户配置会保存在浏览器 `localStorage`
@@ -133,7 +133,7 @@ npm run dev:full
 
 ### 通用 AI 配置
 
-- `AI_PROVIDER_TYPE`：`google | openai | anthropic`
+- `AI_PROVIDER_TYPE`：`google | openai`
 - `AI_API_KEY`：`google/openai` 必填
 - `AI_BASE_URL`：`openai` 必填，例如 DeepSeek / GLM / Ark 的兼容接口地址
 - `AI_MODEL`：可选，默认 `google: gemini-flash-latest`，`openai: gpt-4o-mini`
@@ -171,7 +171,7 @@ npm run dev:full
 
 ## Provider 示例
 
-本地 BYOK 推荐配置：
+本地用户 Key 推荐配置：
 
 Gemini：
 
@@ -231,7 +231,7 @@ typst-packages.json     需要同步的 Typst Universe 包清单
 - 项目仍以单体文件为主，部分核心逻辑还需要继续拆分
 - 自动化测试覆盖仍然很少
 - AI 编辑能力目前针对中文 Typst 模板场景做了较多提示词约束
-- `anthropic` provider 只保留了类型入口，尚未接入 SDK
+- Anthropic 暂未接入；需要时再安装并使用官方 `@ai-sdk/anthropic`
 - `npm run dev:full` 目前是“先构建再启动”的模式，还不是完整热更新工作流
 
 ## 路线图

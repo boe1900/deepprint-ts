@@ -1,7 +1,7 @@
 import { createGoogleGenerativeAI } from '@ai-sdk/google'
 import { createOpenAI } from '@ai-sdk/openai'
 
-export type AIProviderType = 'google' | 'openai' | 'anthropic'
+export type AIProviderType = 'google' | 'openai'
 export type OpenAICompatMode = 'chat' | 'responses'
 
 export type AIEnvBindings = {
@@ -24,7 +24,7 @@ export type AIRuntimeConfig = {
 
 const normalizeProviderType = (rawProviderType?: string): AIProviderType => {
   const normalized = (rawProviderType || 'google').toLowerCase()
-  if (normalized === 'google' || normalized === 'openai' || normalized === 'anthropic') {
+  if (normalized === 'google' || normalized === 'openai') {
     return normalized
   }
   throw new Error(`不支持的 AI provider: ${normalized}`)
@@ -47,10 +47,6 @@ export const resolveModelFromConfig = (config: AIRuntimeConfig) => {
       apiMode: 'chat' as OpenAICompatMode,
       languageModel: google(model),
     }
-  }
-
-  if (providerType === 'anthropic') {
-    throw new Error('当前构建未启用 anthropic provider。请先安装并接入 @ai-sdk/anthropic，或改用 AI_PROVIDER_TYPE=openai/google')
   }
 
   if (!config.apiKey) {

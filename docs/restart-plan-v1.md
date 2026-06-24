@@ -93,9 +93,9 @@ Remove fake provider branches. For example, do not list Anthropic until `@ai-sdk
 
 Avoid a custom provider registry in V1. A tiny resolver that converts user/server config into an AI SDK model is enough.
 
-## 6. BYOK
+## 6. User Keys
 
-Replace the current awkward BYOK path with one standard config shape.
+Replace the current awkward user-key path with one standard config shape.
 
 Supported modes:
 

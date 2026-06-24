@@ -103,7 +103,7 @@ export default function LocalAiSettingsDialog({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <KeyRound className="h-5 w-5" />
-            本地 BYOK 设置
+            本地用户 Key 设置
           </DialogTitle>
           <DialogDescription>
             仅支持 Gemini 和 OpenAI-compatible。配置只保存在当前浏览器的 localStorage；
