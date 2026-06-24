@@ -1,6 +1,9 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { Pool } from 'pg';
+import { loadLocalEnv } from './load-env';
+
+loadLocalEnv();
 
 const databaseUrl = process.env.DATABASE_URL;
 

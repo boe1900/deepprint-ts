@@ -1,4 +1,4 @@
-// ─── Types matching D1 schema ────────────────────────────────────────────────
+// ─── API types ───────────────────────────────────────────────────────────────
 
 import type { TemplateBundleFiles, TemplateStatus } from './template-bundle'
 

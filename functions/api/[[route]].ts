@@ -94,26 +94,12 @@ const TYPST_QUICK_RULES = [
   '先复用已有变量名和结构，避免大范围重写。',
   '使用 data 时优先 data.at("key", default: "...") 兜底，避免缺字段报错。',
   '新增函数调用时，参数名和值保持简洁，避免传入未知参数。',
-  '二维码优先使用 tiaoma 的 qrcode，且保留白底与静区。',
+  '二维码需要保留白底与静区；具体 Typst 包以编译结果为准。',
   '在网格/表格布局中，列数和内容数量保持一致。',
   '字符串插值和引号必须成对闭合。',
   '修改后若工具返回编译错误，必须基于错误继续修复。',
   '非修改场景只答疑，不输出代码块。',
 ];
-
-const AVAILABLE_FONTS = [
-  'Noto Sans SC',
-  'Noto Serif SC',
-  'Libertinus Sans',
-  'Libertinus Serif',
-  'DejaVu Sans Mono',
-  'New Computer Modern Math',
-  'Noto Emoji',
-]
-
-const AVAILABLE_PACKAGES = [
-  '@preview/tiaoma:0.3.0',
-]
 
 // 健康检查端点
 app.get('/health', (c) => {
@@ -167,14 +153,12 @@ type RequestScopedAIConfig = {
 type GenerateRequest = {
   messages: Array<Omit<any, 'id'>>
   tools?: Record<string, ClientToolSchema>
-  byok?: RequestScopedAIConfig
+  ai_config?: RequestScopedAIConfig
   context?: {
     template_id?: string
     base_typst?: string
     base_data?: Record<string, unknown>
     intent?: 'chat' | 'edit'
-    available_fonts?: string[]
-    available_plugins?: Array<{ spec: string; description?: string }>
   }
 }
 
@@ -378,7 +362,7 @@ ${dataContent}
 // AI 生成端点
 app.post('/generate', requireAuth, async (c) => {
   try {
-    const { messages, tools, context, byok } = await c.req.json<GenerateRequest>()
+    const { messages, tools, context, ai_config } = await c.req.json<GenerateRequest>()
     if (!messages || !Array.isArray(messages)) {
       return c.json({ error: 'messages 参数不合法' }, 400)
     }
@@ -403,14 +387,8 @@ app.post('/generate', requireAuth, async (c) => {
 
     const intent = context?.intent === 'edit' ? 'edit' : 'chat'
     const toolChoice: 'auto' | 'none' = intent === 'edit' ? 'auto' : 'none'
-    const availableFonts = Array.isArray(context?.available_fonts) && context!.available_fonts!.length > 0
-      ? context!.available_fonts!
-      : AVAILABLE_FONTS
-    const availablePlugins = Array.isArray(context?.available_plugins) && context!.available_plugins!.length > 0
-      ? context!.available_plugins!
-      : AVAILABLE_PACKAGES.map((pkg) => ({ spec: pkg, description: '' }))
 
-    const requestScopedAIConfig = parseRequestScopedAIConfig(byok)
+    const requestScopedAIConfig = parseRequestScopedAIConfig(ai_config)
     const { providerType, model, apiMode, languageModel } = requestScopedAIConfig
       ? resolveModelFromConfig(requestScopedAIConfig)
       : resolveModelFromEnv(c.env)
@@ -422,17 +400,10 @@ app.post('/generate', requireAuth, async (c) => {
 高频规则（只列最易错点）：
 ${TYPST_QUICK_RULES.map((rule, idx) => `${idx + 1}. ${rule}`).join('\n')}
 
-当前可用字体（仅可使用这些字体）：
-${availableFonts.map((font) => `- ${font}`).join('\n')}
-
-当前可用插件（仅可使用这些插件）：
-${availablePlugins.map((pkg) => `- ${pkg.spec}${pkg.description ? `（${pkg.description}）` : ''}`).join('\n')}
-
 约束：
-1. 不要使用上面清单之外的字体和插件。
-2. 中文场景优先使用 "Noto Sans SC" 或 "Noto Serif SC"。
-3. 需要条码时优先使用 "@preview/tiaoma:0.3.0"。
-4. 工具错误中若包含 line/column/snippet，优先围绕该位置最小改动修复。
+1. Typst 字体、包解析与可用性以 typst-json-render 的编译结果为准，DeepPrint 不维护白名单。
+2. 需要条码或二维码时可以使用 Typst 生态常见包；若编译失败，按错误信息最小改动修复。
+3. 工具错误中若包含 line/column/snippet，优先围绕该位置最小改动修复。
 
 当前上下文：
 - template_id=${context?.template_id || 'unknown'}

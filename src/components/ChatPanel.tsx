@@ -7,7 +7,6 @@ import {
   type ToolCallMessagePartComponent,
 } from '@assistant-ui/react';
 import { lastAssistantMessageIsCompleteWithToolCalls } from 'ai';
-import typstPackages from '../../typst-packages.json';
 import { Thread } from '@/components/assistant-ui/thread';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { briefErrorText } from '@/lib/brief-error-text';
@@ -19,22 +18,6 @@ import {
   toRequestScopedAIConfig,
   type LocalAIConfig,
 } from '@/lib/local-ai-config';
-
-const AVAILABLE_FONT_FAMILIES = [
-  'Noto Sans SC',
-  'Noto Serif SC',
-  'Libertinus Sans',
-  'Libertinus Serif',
-  'DejaVu Sans Mono',
-  'New Computer Modern Math',
-  'Noto Emoji',
-];
-
-const AVAILABLE_PLUGIN_SPECS = (typstPackages as Array<{ name: string; version: string; description?: string }>)
-  .map((pkg) => ({
-    spec: `@preview/${pkg.name}:${pkg.version}`,
-    description: pkg.description || '',
-  }));
 
 export interface ChatPanelProps {
   activeTemplateId: string;
@@ -236,7 +219,7 @@ export default function ChatPanel({
             trigger: options.trigger,
             messageId: options.messageId,
             metadata: options.requestMetadata,
-            byok: requestScopedAiConfig,
+            ai_config: requestScopedAiConfig,
             context: {
               template_id: activeTemplateId,
               base_typst: getBundleTemplate(toTemplateBundleFiles(undefined, currentCode, currentData)),
@@ -246,8 +229,6 @@ export default function ChatPanel({
                 'data.json': JSON.stringify(currentData, null, 2),
               }),
               intent: latestIntentRef.current,
-              available_fonts: AVAILABLE_FONT_FAMILIES,
-              available_plugins: AVAILABLE_PLUGIN_SPECS,
             },
           },
         };

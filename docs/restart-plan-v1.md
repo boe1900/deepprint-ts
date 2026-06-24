@@ -130,13 +130,11 @@ Move away from Cloudflare Pages Functions and D1.
 Use Docker Compose:
 
 - `web`: DeepPrint TS app/backend
-- `render`: typst-json-render service
 - `db`: PostgreSQL
-- `storage`: local volume for V1 artifacts
 
 Do not preserve Cloudflare compatibility while rewriting this path. It adds cost without helping the new architecture.
 
-Current migration note: `docker-compose.yml` runs the Node/Hono web container and PostgreSQL. Run `typst-json-render` separately on `localhost:8000`; `TJR_RENDER_BASE_URL` points to `host.docker.internal:8000` from Docker.
+Current migration note: `docker-compose.yml` runs only the Node/Hono web container and PostgreSQL. Run `typst-json-render` separately on `localhost:8000`; `TJR_RENDER_BASE_URL` points to `host.docker.internal:8000` from Docker.
 
 ## 9. Database
 
@@ -153,7 +151,7 @@ V1 can stay simple:
 
 Add `files_json jsonb` to templates and versions.
 
-Artifacts can live in a local Docker volume first. Store only metadata/path in Postgres.
+Artifacts are owned by `typst-json-render`. DeepPrint stores the TemplateBundle and displays returned PNG/PDF artifacts.
 
 ## 10. What To Delete Or Replace
 

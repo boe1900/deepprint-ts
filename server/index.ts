@@ -4,6 +4,9 @@ import { extname, join } from 'node:path';
 import { Hono } from 'hono';
 import { app as apiApp, type Bindings, type Variables } from '../functions/api/[[route]]';
 import { createPostgresDatabase } from './postgres-db';
+import { loadLocalEnv } from './load-env';
+
+loadLocalEnv();
 
 const port = Number(process.env.PORT || 3000);
 const databaseUrl = process.env.DATABASE_URL;

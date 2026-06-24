@@ -10,7 +10,7 @@ DeepPrint TS 是一个面向 Typst 模板生产的实验性工作台：你可以
 
 - 管理业务分组与模板
 - 在浏览器里编辑 Typst 模板与 JSON mock data
-- 使用 Typst Web 编译器做实时预览
+- 通过 `typst-json-render` 做服务端 PNG 预览和 PDF 导出
 - 通过 AI 对话修改当前模板，并把成功应用的变更写回数据库
 - 为模板保存 AI 会话和历史版本，支持回滚
 - 运行在 Node/Hono + PostgreSQL 上
@@ -32,7 +32,7 @@ DeepPrint TS 是一个面向 Typst 模板生产的实验性工作台：你可以
 - Hono + Node server
 - PostgreSQL
 - Better Auth（GitHub 登录）
-- Typst Web Compiler / Renderer
+- `typst-json-render` 渲染服务
 - AI SDK（Google 与 OpenAI-compatible provider）
 
 ## 快速开始
@@ -41,7 +41,7 @@ DeepPrint TS 是一个面向 Typst 模板生产的实验性工作台：你可以
 
 - Node.js 20+
 - npm 10+
-- Wrangler 4（`npm ci` 会自动安装本地版本）
+- Docker（推荐用于本地 PostgreSQL）
 - 一个可用的 GitHub OAuth App
 - 如果你要调试“服务端默认 AI”模式，需要一个可用的 AI provider key
 
@@ -51,14 +51,15 @@ DeepPrint TS 是一个面向 Typst 模板生产的实验性工作台：你可以
 npm ci
 ```
 
-`npm run dev` 和 `npm run build` 会自动执行 `npm run sync`，从 `typst-packages.json` 下载所需的 Typst Universe 包。如果你是第一次 clone，这一步需要联网。
+DeepPrint TS 不下载 Typst Universe 包，也不内置 Typst 字体/插件资产；这些都由 `typst-json-render` 渲染服务负责解析。
 
 ### 3. 配置环境变量
 
 复制示例文件：
 
 ```bash
-cp .dev.vars.example .dev.vars
+cp .env.example .env
+cp .env.local.example .env.local
 ```
 
 然后按需填写：
@@ -80,6 +81,7 @@ cp .dev.vars.example .dev.vars
 
 说明：
 
+- `.env` 给 Docker 使用，`.env.local` 给本机 `npm run ...` 覆盖本地地址。
 - `BETTER_AUTH_URL` 不填也可以；本地开发时会从请求 URL 自动推断。
 - 现在默认推荐使用“本地用户 Key”模式：用户在浏览器里自行配置 Gemini 或 OpenAI-compatible 的 `API Key`，配置只保存在当前浏览器。
 - 如果只想体验模板编辑和预览，不使用 AI，可以不填 AI 相关变量。
@@ -117,7 +119,7 @@ cp .env.example .env
 docker compose up
 ```
 
-当前仍需单独启动 `typst-json-render`，并让 `TJR_RENDER_BASE_URL` 指向它。
+当前 `docker-compose.yml` 只启动 DeepPrint Web 和 PostgreSQL。`typst-json-render` 仍需单独启动，并让 `TJR_RENDER_BASE_URL` 指向它。
 
 本地接口冒烟可以临时设置 `DEEPPRINT_DEV_AUTH=true`，再用 `x-deepprint-dev-user-id` 请求头模拟登录用户。不要在生产环境开启。
 
@@ -132,7 +134,7 @@ npm run smoke
 - `npm run dev`：前端开发模式
 - `npm run dev:full`：构建后启动 Node/Hono 完整应用
 - `npm run lint`：运行 ESLint
-- `npm run build`：同步 Typst 包、类型检查并打包
+- `npm run build`：类型检查并打包
 - `npm run check`：执行 lint + build
 - `npm run smoke`：对 Node API、PostgreSQL、render 服务做最小冒烟
 
@@ -236,9 +238,6 @@ src/                    前端应用
 functions/              Hono API 源码
 server/                 Node server 与 PostgreSQL 适配
 migrations-postgres/    PostgreSQL schema
-scripts/update-universe.mjs
-public/fonts/           Typst 预览需要的字体资源
-typst-packages.json     需要同步的 Typst Universe 包清单
 ```
 
 ## 当前限制
