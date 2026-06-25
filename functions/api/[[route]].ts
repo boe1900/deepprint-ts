@@ -1,6 +1,7 @@
 import { Hono } from 'hono'
 import { createMiddleware } from 'hono/factory'
-import { convertToModelMessages, jsonSchema, stepCountIs, streamText } from 'ai'
+import { convertToModelMessages, stepCountIs, streamText, tool } from 'ai'
+import { z } from 'zod'
 import { createAuth } from '../lib/auth'
 import { resolveModelFromConfig, resolveModelFromEnv } from '../lib/ai-provider'
 import { evaluateTrialGenerationLimit, recordSuccessfulGeneration } from '../lib/trial-generation-limit'
@@ -137,11 +138,6 @@ app.post('/render/compile', requireAuth, async (c) => {
   }
 })
 
-type ClientToolSchema = {
-  description?: string
-  parameters?: unknown
-}
-
 type RequestScopedAIConfig = {
   provider_type?: string
   api_key?: string
@@ -152,7 +148,6 @@ type RequestScopedAIConfig = {
 
 type GenerateRequest = {
   messages: Array<Omit<any, 'id'>>
-  tools?: Record<string, ClientToolSchema>
   ai_config?: RequestScopedAIConfig
   context?: {
     template_id?: string
@@ -160,6 +155,17 @@ type GenerateRequest = {
     base_data?: Record<string, unknown>
     intent?: 'chat' | 'edit'
   }
+}
+
+const templateBundleFilesSchema = z.record(z.string(), z.string())
+
+const deepprintTools = {
+  update_template_bundle: tool({
+    description: '应用并编译完整 TemplateBundle files map。每次模板修改都要调用该工具。',
+    inputSchema: z.object({
+      files: templateBundleFilesSchema.describe('完整 TemplateBundle 文件映射，必须包含 manifest.json、template.typ、data.json、data.schema.json'),
+    }),
+  }),
 }
 
 type TemplateRow = {
@@ -362,26 +368,13 @@ ${dataContent}
 // AI 生成端点
 app.post('/generate', requireAuth, async (c) => {
   try {
-    const { messages, tools, context, ai_config } = await c.req.json<GenerateRequest>()
+    const { messages, context, ai_config } = await c.req.json<GenerateRequest>()
     if (!messages || !Array.isArray(messages)) {
       return c.json({ error: 'messages 参数不合法' }, 400)
     }
 
-    const normalizedTools = Object.fromEntries(
-      Object.entries(tools || {}).map(([name, tool]) => [
-        name,
-        {
-          description: tool.description,
-          inputSchema: jsonSchema((tool.parameters || {
-            type: 'object',
-            additionalProperties: true,
-          }) as Record<string, unknown>),
-        },
-      ]),
-    )
-
     const modelMessages = await convertToModelMessages(messages, {
-      tools: normalizedTools,
+      tools: deepprintTools,
       ignoreIncompleteToolCalls: true,
     })
 
@@ -422,7 +415,7 @@ ${templateContextSection}`
       model,
       system: systemPrompt,
       messages: modelMessages,
-      tools: normalizedTools,
+      tools: deepprintTools,
       toolChoice,
       stopWhen: stepCountIs(6),
     })

@@ -72,8 +72,9 @@ Keep the workflow boring:
 
 - build system prompt
 - provide current bundle files
-- expose one tool: `update_template_bundle`
-- apply the tool result to the draft
+- expose one AI SDK UI client-side tool: `update_template_bundle`
+- define the tool schema on the server with AI SDK `tool()` + Zod
+- execute the tool in the browser because it mutates editor UI state
 - call Rust validate/compile
 - return errors or preview to the UI
 
