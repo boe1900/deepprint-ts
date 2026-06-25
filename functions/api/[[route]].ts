@@ -1,7 +1,7 @@
 import { Hono } from 'hono'
 import { createMiddleware } from 'hono/factory'
-import { convertToModelMessages, stepCountIs, streamText, tool } from 'ai'
-import { z } from 'zod'
+import { convertToModelMessages, stepCountIs, streamText } from 'ai'
+import { frontendTools } from '@assistant-ui/react-ai-sdk'
 import { createAuth } from '../lib/auth'
 import { resolveModelFromConfig, resolveModelFromEnv } from '../lib/ai-provider'
 import { evaluateTrialGenerationLimit, recordSuccessfulGeneration } from '../lib/trial-generation-limit'
@@ -148,24 +148,15 @@ type RequestScopedAIConfig = {
 
 type GenerateRequest = {
   messages: Array<Omit<any, 'id'>>
+  // AssistantChatTransport forwards the browser-registered toolkit schemas.
+  // Keep tool definitions in the UI because these tools mutate editor state.
+  tools?: Record<string, any>
   ai_config?: RequestScopedAIConfig
   context?: {
     template_id?: string
     base_typst?: string
     base_data?: Record<string, unknown>
-    intent?: 'chat' | 'edit'
   }
-}
-
-const templateBundleFilesSchema = z.record(z.string(), z.string())
-
-const deepprintTools = {
-  update_template_bundle: tool({
-    description: '应用并编译完整 TemplateBundle files map。每次模板修改都要调用该工具。',
-    inputSchema: z.object({
-      files: templateBundleFilesSchema.describe('完整 TemplateBundle 文件映射，必须包含 manifest.json、template.typ、data.json、data.schema.json'),
-    }),
-  }),
 }
 
 type TemplateRow = {
@@ -368,18 +359,18 @@ ${dataContent}
 // AI 生成端点
 app.post('/generate', requireAuth, async (c) => {
   try {
-    const { messages, context, ai_config } = await c.req.json<GenerateRequest>()
+    const { messages, tools, context, ai_config } = await c.req.json<GenerateRequest>()
     if (!messages || !Array.isArray(messages)) {
       return c.json({ error: 'messages 参数不合法' }, 400)
     }
+    // Convert assistant-ui frontend tools into AI SDK tools without duplicating
+    // their schema on the server.
+    const clientTools = tools && typeof tools === 'object' ? frontendTools(tools) : {}
 
     const modelMessages = await convertToModelMessages(messages, {
-      tools: deepprintTools,
+      tools: clientTools,
       ignoreIncompleteToolCalls: true,
     })
-
-    const intent = context?.intent === 'edit' ? 'edit' : 'chat'
-    const toolChoice: 'auto' | 'none' = intent === 'edit' ? 'auto' : 'none'
 
     const requestScopedAIConfig = parseRequestScopedAIConfig(ai_config)
     const { providerType, model, apiMode, languageModel } = requestScopedAIConfig
@@ -400,14 +391,9 @@ ${TYPST_QUICK_RULES.map((rule, idx) => `${idx + 1}. ${rule}`).join('\n')}
 
 当前上下文：
 - template_id=${context?.template_id || 'unknown'}
-- intent=${intent}
 - provider_type=${providerType}
 - model=${model}
 - api_mode=${apiMode}
-
-规则补充：
-- 当 intent=chat：只能聊天答疑，禁止调用工具。
-- 当 intent=edit：可调用工具进行模版修改。
 
 ${templateContextSection}`
 
@@ -415,8 +401,7 @@ ${templateContextSection}`
       model,
       system: systemPrompt,
       messages: modelMessages,
-      tools: deepprintTools,
-      toolChoice,
+      tools: clientTools,
       stopWhen: stepCountIs(6),
     })
 

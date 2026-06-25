@@ -1,9 +1,13 @@
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { PanelRightClose, Settings2, Sparkles } from 'lucide-react';
 import { AssistantChatTransport, useChatRuntime } from '@assistant-ui/react-ai-sdk';
 import {
   AssistantRuntimeProvider,
-  makeAssistantTool,
+  Tools,
+  defineToolkit,
+  useAui,
+  AuiProvider,
+  type Toolkit,
   type ToolCallMessagePartComponent,
 } from '@assistant-ui/react';
 import { lastAssistantMessageIsCompleteWithToolCalls } from 'ai';
@@ -32,6 +36,12 @@ export interface ChatPanelProps {
 }
 
 type UpdateTypstResult = CompileFeedback;
+
+const ToolkitProvider = ({ toolkit, children }: { toolkit: Toolkit; children: React.ReactNode }) => {
+  const parent = useAui();
+  const aui = useAui({ tools: Tools({ toolkit }) }, { parent });
+  return <AuiProvider value={aui}>{children}</AuiProvider>;
+};
 
 const UpdateTypstToolCard: ToolCallMessagePartComponent<Record<string, unknown>, UpdateTypstResult> = ({
   status,
@@ -101,8 +111,6 @@ export default function ChatPanel({
   const [agentStatus, setAgentStatus] = useState<'idle' | 'compiling' | 'repairing' | 'success' | 'error'>('idle');
   const [hasFailedOnce, setHasFailedOnce] = useState(false);
   const [lastCompileDiagnostics, setLastCompileDiagnostics] = useState<CompileFeedback['diagnostics'] | null>(null);
-  const appliedByToolInTurnRef = useRef(false);
-  const latestIntentRef = useRef<'chat' | 'edit'>('chat');
   const autoToolLoopCountRef = useRef(0);
   const hasLocalAiConfig = isLocalAIConfigReady(localAiConfig);
   const requestScopedAiConfig = hasLocalAiConfig ? toRequestScopedAIConfig(localAiConfig) : undefined;
@@ -110,93 +118,65 @@ export default function ChatPanel({
     ? `${getLocalAIProviderLabel(localAiConfig.providerType)} · 本地用户 Key`
     : '未配置本地 AI';
 
-  const inferIntentFromText = useCallback((text: string): 'chat' | 'edit' => {
-    const normalized = text.trim().toLowerCase();
-    if (!normalized) return 'chat';
-    const editKeywords = [
-      '修改', '改成', '改下', '更新', '应用', '生成', '创建', '新建', '重写', '调整模板',
-      'change', 'update', 'apply', 'generate', 'create', 'rewrite', 'refactor',
-    ];
-    return editKeywords.some((keyword) => normalized.includes(keyword)) ? 'edit' : 'chat';
-  }, []);
-
-  const extractLastUserText = useCallback((messages: any[] | undefined): string => {
-    if (!Array.isArray(messages)) return '';
-    for (let i = messages.length - 1; i >= 0; i -= 1) {
-      const message = messages[i];
-      if (message?.role !== 'user') continue;
-      if (typeof message.content === 'string') return message.content;
-      if (Array.isArray(message.parts)) {
-        return message.parts
-          .filter((part: any) => part?.type === 'text' && typeof part?.text === 'string')
-          .map((part: any) => part.text)
-          .join('\n');
-      }
-    }
-    return '';
-  }, []);
-
-  const UpdateTypstTool = useMemo(() => makeAssistantTool({
-    toolName: 'update_template_bundle',
-    description: '应用并编译完整 TemplateBundle files map。每次模板修改都要调用该工具。',
-    parameters: {
-      type: 'object',
-      properties: {
-        files: {
-          type: 'object',
-          description: '完整 TemplateBundle 文件映射，必须包含 manifest.json、template.typ、data.json、data.schema.json',
-          additionalProperties: { type: 'string' },
+  // Single source of truth for the client-side tool: AssistantChatTransport
+  // forwards this schema to /api/generate, then the browser executes it here.
+  const toolkit = useMemo(() => defineToolkit({
+    update_template_bundle: {
+      type: 'frontend',
+      description: '应用并编译完整 TemplateBundle files map。每次模板修改都要调用该工具。',
+      parameters: {
+        type: 'object',
+        properties: {
+          files: {
+            type: 'object',
+            description: '完整 TemplateBundle 文件映射，必须包含 manifest.json、template.typ、data.json、data.schema.json',
+            additionalProperties: { type: 'string' },
+          },
         },
+        required: ['files'],
+        additionalProperties: false,
       },
-      required: ['files'],
-      additionalProperties: false,
-    },
-    disabled: !activeTemplateId,
-    render: UpdateTypstToolCard,
-    execute: async (args: Record<string, unknown>) => {
-      if (latestIntentRef.current !== 'edit') {
-        setAgentStatus('idle');
-        return { ok: false, error: '当前是咨询对话，未执行模板修改。若要改模板，请明确说“请修改/生成模板”。' };
-      }
-      if (!activeTemplateId) {
+      render: UpdateTypstToolCard,
+      execute: async (args: Record<string, unknown>) => {
+        if (!activeTemplateId) {
+          setAgentStatus('error');
+          return { ok: false, error: '请先在左侧选择一个模版' };
+        }
+
+        const files = toTemplateBundleFiles(
+          args.files,
+          currentCode,
+          currentData,
+        );
+        const nextCode = getBundleTemplate(files).trim();
+        const nextData = getBundleData(files);
+
+        if (!nextCode.trim()) {
+          setAgentStatus('error');
+          return { ok: false, error: 'template.typ 不能为空' };
+        }
+        if (!nextData || Object.keys(nextData).length === 0) {
+          setAgentStatus('error');
+          return { ok: false, error: 'data.json 不能为空，请同时返回与模板匹配的模拟数据' };
+        }
+
+        setAgentStatus(hasFailedOnce ? 'repairing' : 'compiling');
+        const compileResult = await onApplyAndValidate(nextCode, nextData);
+        if (compileResult.ok) {
+          setAgentStatus('success');
+          setHasFailedOnce(false);
+          setLastCompileDiagnostics(null);
+          autoToolLoopCountRef.current = 0;
+          return compileResult;
+        }
+
         setAgentStatus('error');
-        return { ok: false, error: '请先在左侧选择一个模版' };
-      }
-
-      const files = toTemplateBundleFiles(
-        args.files,
-        currentCode,
-        currentData,
-      );
-      const nextCode = getBundleTemplate(files).trim();
-      const nextData = getBundleData(files);
-
-      if (!nextCode.trim()) {
-        setAgentStatus('error');
-        return { ok: false, error: 'template.typ 不能为空' };
-      }
-      if (!nextData || Object.keys(nextData).length === 0) {
-        setAgentStatus('error');
-        return { ok: false, error: 'data.json 不能为空，请同时返回与模板匹配的模拟数据' };
-      }
-
-      appliedByToolInTurnRef.current = true;
-      setAgentStatus(hasFailedOnce ? 'repairing' : 'compiling');
-      const compileResult = await onApplyAndValidate(nextCode, nextData);
-      if (compileResult.ok) {
-        setAgentStatus('success');
-        setHasFailedOnce(false);
-        setLastCompileDiagnostics(null);
-        autoToolLoopCountRef.current = 0;
-        return compileResult;
-      }
-
-      setAgentStatus('error');
-      setHasFailedOnce(true);
-      setLastCompileDiagnostics(compileResult.diagnostics || {
-        message: compileResult.error || '编译失败',
-      });
-      return { ok: false, error: compileResult.error || '编译失败' };
+        setHasFailedOnce(true);
+        setLastCompileDiagnostics(compileResult.diagnostics || {
+          message: compileResult.error || '编译失败',
+        });
+        return { ok: false, error: compileResult.error || '编译失败' };
+      },
     },
   }), [activeTemplateId, currentCode, currentData, hasFailedOnce, onApplyAndValidate]);
 
@@ -205,12 +185,9 @@ export default function ChatPanel({
     transport: new AssistantChatTransport({
       api: '/api/generate',
       prepareSendMessagesRequest: async (options) => {
-        appliedByToolInTurnRef.current = false;
         if (String(options.trigger || '').includes('submit')) {
           autoToolLoopCountRef.current = 0;
         }
-        const lastUserText = extractLastUserText(options.messages as any[]);
-        latestIntentRef.current = inferIntentFromText(lastUserText);
         return {
           body: {
             ...(options.body || {}),
@@ -228,7 +205,6 @@ export default function ChatPanel({
                 'template.typ': currentCode,
                 'data.json': JSON.stringify(currentData, null, 2),
               }),
-              intent: latestIntentRef.current,
             },
           },
         };
@@ -240,46 +216,13 @@ export default function ChatPanel({
       autoToolLoopCountRef.current += 1;
       return autoToolLoopCountRef.current <= 4;
     },
-    onFinish: async ({ message, messages }) => {
+    onFinish: async ({ messages }) => {
       if (activeTemplateId) {
         const plainMessages = (messages || []).map((chatMessage: any) => ({
           role: String(chatMessage?.role || 'assistant'),
           parts: Array.isArray(chatMessage?.parts) ? chatMessage.parts : [],
         }));
         await onPersistMessages(activeTemplateId, plainMessages);
-      }
-
-      if (appliedByToolInTurnRef.current || !activeTemplateId) return;
-      if (latestIntentRef.current !== 'edit') return;
-
-      const textContent = (message.parts || [])
-        .filter((part: any) => part?.type === 'text' && typeof part?.text === 'string')
-        .map((part: any) => part.text)
-        .join('\n');
-      if (!textContent) return;
-
-      const typstMatch = textContent.match(/```typst\s*([\s\S]*?)```/i);
-      const nextCode = (typstMatch?.[1] || '').trim();
-      if (!nextCode) return;
-
-      const isLikelyTypst =
-        nextCode.includes('#set ') ||
-        nextCode.includes('#let ') ||
-        nextCode.includes('#import ') ||
-        nextCode.includes('sys.inputs') ||
-        nextCode.includes('@preview/');
-      if (!isLikelyTypst) return;
-
-      setAgentStatus('compiling');
-      const compileResult = await onApplyAndValidate(nextCode);
-      if (compileResult.ok) {
-        setAgentStatus('success');
-        setLastCompileDiagnostics(null);
-      } else {
-        setAgentStatus('error');
-        setLastCompileDiagnostics(compileResult.diagnostics || {
-          message: compileResult.error || '编译失败',
-        });
       }
     },
   });
@@ -360,13 +303,14 @@ export default function ChatPanel({
       <div className="flex-1 min-h-0">
         <TooltipProvider>
           <AssistantRuntimeProvider runtime={runtime}>
-            <UpdateTypstTool />
-            <Thread
-              inputDisabled={!activeTemplateId || !hasLocalAiConfig}
-              inputDisabledReason={!activeTemplateId
-                ? '请先在左侧选择一个模版，再和 AI 讨论或修改'
-                : '请先配置本地 AI Key，再和 AI 讨论或修改'}
-            />
+            <ToolkitProvider toolkit={toolkit}>
+              <Thread
+                inputDisabled={!activeTemplateId || !hasLocalAiConfig}
+                inputDisabledReason={!activeTemplateId
+                  ? '请先在左侧选择一个模版，再和 AI 讨论或修改'
+                  : '请先配置本地 AI Key，再和 AI 讨论或修改'}
+              />
+            </ToolkitProvider>
           </AssistantRuntimeProvider>
         </TooltipProvider>
       </div>

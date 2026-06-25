@@ -73,7 +73,9 @@ Keep the workflow boring:
 - build system prompt
 - provide current bundle files
 - expose one AI SDK UI client-side tool: `update_template_bundle`
-- define the tool schema on the server with AI SDK `tool()` + Zod
+- define the tool once in the browser with assistant-ui `defineToolkit`
+- forward that tool schema through `AssistantChatTransport`
+- convert forwarded frontend tools on the server with `frontendTools(...)`
 - execute the tool in the browser because it mutates editor UI state
 - call Rust validate/compile
 - return errors or preview to the UI
