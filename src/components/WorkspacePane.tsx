@@ -41,6 +41,7 @@ interface WorkspacePaneProps {
   onChangeTab: (tab: WorkspaceTab) => void;
   onCodeChange: (value: string) => void;
   onEditorMount: OnMount;
+  onExportBundle: () => void;
   onExportPdf: () => void | Promise<void>;
   onOpenBlankDialog: () => void;
   onOpenDataModal: () => void;
@@ -68,6 +69,7 @@ export default function WorkspacePane({
   onChangeTab,
   onCodeChange,
   onEditorMount,
+  onExportBundle,
   onExportPdf,
   onOpenBlankDialog,
   onOpenDataModal,
@@ -202,6 +204,16 @@ export default function WorkspacePane({
             {isExportingPdf ? '导出中...' : '导出 PDF'}
           </button>
 
+          <button
+            onClick={onExportBundle}
+            disabled={!hasActiveTemplate}
+            className="flex items-center gap-2 px-3 py-1.5 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 disabled:opacity-50 text-slate-600 dark:text-slate-300 text-xs font-bold rounded-lg border border-slate-200 dark:border-slate-700 shadow-sm transition-all"
+            title={!hasActiveTemplate ? '请选择或新建模版后导出' : '导出完整 TemplateBundle'}
+          >
+            <Download size={14} className="text-slate-500 dark:text-slate-400" />
+            导出模板
+          </button>
+
           {!showChat && (
             <button
               onClick={onShowChat}
@@ -329,7 +341,7 @@ export default function WorkspacePane({
       </div>
 
       <div className="h-7 bg-white dark:bg-slate-900 border-t border-slate-200 dark:border-slate-700/60 px-4 flex items-center justify-between text-[10px] text-slate-400 dark:text-slate-500 shrink-0">
-        <span>Typst WASM Engine v0.6</span>
+        <span>typst-json-render</span>
         <span>{code.length} chars</span>
       </div>
     </main>

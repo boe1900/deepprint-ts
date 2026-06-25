@@ -80,6 +80,29 @@ Keep the workflow boring:
 - call Rust validate/compile
 - return errors or preview to the UI
 
+```mermaid
+sequenceDiagram
+  participant User
+  participant Browser as "Browser: ChatPanel + assistant-ui"
+  participant Hono as "Hono API: /api/generate"
+  participant LLM as "AI Provider via AI SDK"
+  participant Render as "typst-json-render"
+
+  User->>Browser: Ask to edit a template
+  Browser->>Hono: messages + current bundle + frontend tool schema
+  Hono->>LLM: streamText(messages, tools)
+  LLM-->>Hono: tool call: update_template_bundle(files)
+  Hono-->>Browser: stream tool call
+  Browser->>Browser: execute client-side tool and update editor state
+  Browser->>Hono: /render/validate(files)
+  Hono->>Render: validate TemplateBundle
+  Render-->>Hono: ok or diagnostics
+  Hono-->>Browser: compile feedback
+  Browser-->>Hono: tool result for next AI step
+  Hono->>LLM: continue if repair is needed
+  LLM-->>Browser: final assistant message
+```
+
 Do not add Flue, Mastra, LangGraph, or a custom agent framework in V1. Add one only after this direct workflow becomes hard to maintain.
 
 ## 5. Provider Policy

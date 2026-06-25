@@ -24,7 +24,8 @@ import {
   saveLocalAIConfig,
   type LocalAIConfig,
 } from '@/lib/local-ai-config';
-import { toTemplateBundleFiles } from '@/lib/template-bundle';
+import { downloadZip } from '@/lib/download-zip';
+import { getBundleData, getBundleTemplate, toTemplateBundleFiles, type TemplateBundleFiles } from '@/lib/template-bundle';
 
 // Auth
 import { authClient } from '@/lib/auth-client';
@@ -179,6 +180,7 @@ export default function DeepPrintStudio() {
     activeTemplateId,
     chatSeedMessages,
     chatSeedVersion,
+    bundleFiles,
     code,
     data,
     hasActiveTemplate,
@@ -186,6 +188,7 @@ export default function DeepPrintStudio() {
     selectTemplate: handleSelectTemplate,
     setCode,
     setData,
+    setBundleFiles,
   } = useActiveTemplateState({
     defaultCode: DEFAULT_CODE,
     defaultData: DEFAULT_DATA,
@@ -265,22 +268,24 @@ export default function DeepPrintStudio() {
   // 保存当前模版
   const handleSave = useCallback(async () => {
     if (!activeTemplateId) return;
+    const files = toTemplateBundleFiles(bundleFiles, code, data);
     setIsSaving(true);
     try {
       await api.updateTemplate(activeTemplateId, {
         content: code,
         mock_data: data,
-        files_json: toTemplateBundleFiles(undefined, code, data),
+        files_json: files,
         update_source: 'manual',
         update_summary: '手动保存',
       });
+      setBundleFiles(files);
     } catch (err) {
       console.error('保存失败:', err);
       alert('保存失败，请检查网络连接或登录状态');
     } finally {
       setIsSaving(false);
     }
-  }, [activeTemplateId, code, data]);
+  }, [activeTemplateId, bundleFiles, code, data, setBundleFiles]);
 
   const handlePersistAiMessages = useCallback(async (templateId: string, messages: Array<{ role: string; parts: unknown[] }>) => {
     if (!templateId) return;
@@ -305,6 +310,7 @@ export default function DeepPrintStudio() {
     previewRef,
     setCode,
     setData,
+    setBundleFiles,
   });
 
   const sanitizeFilename = useCallback((name: string) => {
@@ -340,44 +346,60 @@ export default function DeepPrintStudio() {
     }
   }, [activeTemplateId, folders, sanitizeFilename]);
 
+  const handleExportBundle = useCallback(() => {
+    if (!activeTemplateId) return;
+    const activeTemplate = folders.flatMap(f => f.templates).find(t => t.id === activeTemplateId);
+    const baseName = sanitizeFilename(activeTemplate?.name || 'template-bundle');
+    downloadZip(`${baseName}.template-bundle.zip`, toTemplateBundleFiles(bundleFiles, code, data));
+  }, [activeTemplateId, bundleFiles, code, data, folders, sanitizeFilename]);
+
+  const handleCodeChange = useCallback((nextCode: string) => {
+    setCode(nextCode);
+    setBundleFiles(toTemplateBundleFiles(bundleFiles, nextCode, data));
+  }, [bundleFiles, data, setBundleFiles, setCode]);
+
+  const handleDataSave = useCallback((nextData: Record<string, unknown>) => {
+    setData(nextData);
+    setBundleFiles(toTemplateBundleFiles(bundleFiles, code, nextData));
+  }, [bundleFiles, code, setBundleFiles, setData]);
+
   // 主题
   const { theme, resolvedTheme, cycleTheme } = useTheme();
   const ThemeIcon = theme === THEMES.SYSTEM ? Monitor : (theme === THEMES.LIGHT ? Sun : Moon);
   const themeLabel = theme === THEMES.SYSTEM ? '跟随系统' : (theme === THEMES.LIGHT ? '浅色' : '深色');
 
   // AI 工具回调：应用代码并立即编译，返回给模型用于自动修复循环
-  const handleApplyAndValidateFromAi = useCallback(async (nextCode: string, nextData?: Record<string, unknown>) => {
-    const previousCode = code;
-    const previousData = data;
-    const mergedData = nextData ?? data;
-    if (nextData) {
-      setData(nextData);
-    }
-    setCode(nextCode);
+  const handleApplyAndValidateFromAi = useCallback(async (files: TemplateBundleFiles) => {
+    const nextCode = getBundleTemplate(files);
+    const nextData = getBundleData(files);
+    const mergedData = Object.keys(nextData).length > 0 ? nextData : data;
     if (!previewRef.current) {
       return { ok: false, error: '预览引擎未就绪' };
     }
     const compileResult = await previewRef.current.compileAndGetError(nextCode, mergedData, true);
+    if (!compileResult.ok) {
+      return compileResult;
+    }
+
+    setCode(nextCode);
+    setData(mergedData);
+    setBundleFiles(files);
+
     if (compileResult.ok && activeTemplateId) {
       try {
         await api.updateTemplate(activeTemplateId, {
           content: nextCode,
           mock_data: mergedData,
-          files_json: toTemplateBundleFiles(undefined, nextCode, mergedData),
+          files_json: files,
           update_source: 'ai',
           update_summary: 'AI 应用模板修改',
         });
       } catch (err) {
         if (err instanceof ApiError && err.status === 429) {
-          setCode(previousCode);
-          setData(previousData);
-          if (previewRef.current) {
-            try {
-              await previewRef.current.compileAndGetError(previousCode, previousData, true);
-            } catch (rollbackError) {
-              console.error('回滚 AI 变更失败:', rollbackError);
-            }
-          }
+          setCode(code);
+          setData(data);
+          setBundleFiles(bundleFiles);
+          void previewRef.current.compileAndGetError(code, data, true);
         }
         return {
           ok: false,
@@ -386,7 +408,7 @@ export default function DeepPrintStudio() {
       }
     }
     return compileResult;
-  }, [activeTemplateId, code, data, setCode, setData]);
+  }, [activeTemplateId, bundleFiles, code, data, setBundleFiles, setCode, setData]);
 
   return (
     <div className="flex h-screen bg-white dark:bg-slate-900 text-slate-900 dark:text-white overflow-hidden transition-colors">
@@ -426,9 +448,10 @@ export default function DeepPrintStudio() {
         resolvedTheme={resolvedTheme}
         showChat={showChat}
         onChangeTab={setActiveTab}
-        onCodeChange={setCode}
+        onCodeChange={handleCodeChange}
         onEditorMount={handleEditorMount}
         onExportPdf={handleExportPdf}
+        onExportBundle={handleExportBundle}
         onOpenBlankDialog={templateDialogs.blankDialog.openDialog}
         onOpenDataModal={() => setShowDataModal(true)}
         onOpenLogin={() => setShowLoginDialog(true)}
@@ -461,7 +484,7 @@ export default function DeepPrintStudio() {
         open={showDataModal}
         onOpenChange={setShowDataModal}
         data={data}
-        onSave={setData}
+        onSave={handleDataSave}
         resolvedTheme={resolvedTheme}
       />
 

@@ -7,29 +7,22 @@ import { MarkdownText } from "@/components/assistant-ui/markdown-text";
 import { ToolFallback } from "@/components/assistant-ui/tool-fallback";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { Button } from "@/components/ui/button";
-import { cn } from "@/lib/utils";
 import {
-  ActionBarMorePrimitive,
-  ActionBarPrimitive,
   AuiIf,
-  BranchPickerPrimitive,
   ComposerPrimitive,
   ErrorPrimitive,
   MessagePrimitive,
   SuggestionPrimitive,
   ThreadPrimitive,
+  groupPartByType,
 } from "@assistant-ui/react";
 import {
   ArrowDownIcon,
   ArrowUpIcon,
-  CheckIcon,
-  ChevronLeftIcon,
-  ChevronRightIcon,
-  CopyIcon,
-  DownloadIcon,
-  MoreHorizontalIcon,
-  PencilIcon,
-  RefreshCwIcon,
+  AlertCircleIcon,
+  ChevronDownIcon,
+  CheckCircle2Icon,
+  LoaderIcon,
   SquareIcon,
 } from "lucide-react";
 import type { FC } from "react";
@@ -209,6 +202,65 @@ const MessageError: FC = () => {
   );
 };
 
+const AssistantMessageParts: FC = () => {
+  return (
+    <MessagePrimitive.GroupedParts
+      groupBy={groupPartByType({
+        reasoning: ["group-process", "group-reasoning"],
+        "tool-call": ["group-process", "group-tool"],
+        "standalone-tool-call": [],
+      })}
+      indicator="no-text"
+    >
+      {({ part, children }) => {
+        switch (part.type) {
+          case "text":
+            return <MarkdownText />;
+          case "group-process":
+            return <AgentProcess status={part.status.type}>{children}</AgentProcess>;
+          case "group-reasoning":
+          case "group-tool":
+            return <div className="space-y-2">{children}</div>;
+          case "tool-call":
+            return part.toolUI ?? <ToolFallback {...part} />;
+          case "indicator":
+            return <AgentIndicator />;
+          default:
+            return null;
+        }
+      }}
+    </MessagePrimitive.GroupedParts>
+  );
+};
+
+const AgentProcess: FC<{ children: React.ReactNode; status: string }> = ({ children, status }) => {
+  const Icon = status === "running"
+    ? LoaderIcon
+    : status === "incomplete"
+      ? AlertCircleIcon
+      : CheckCircle2Icon;
+
+  return (
+    <div className="my-2 rounded-xl border border-slate-200 dark:border-slate-700/60 bg-slate-50/70 dark:bg-slate-950/30">
+      <div className="flex items-center gap-2 border-b border-slate-200/70 dark:border-slate-700/60 px-3 py-2 text-[12px] font-semibold text-slate-600 dark:text-slate-300">
+        <Icon className={`size-3.5 ${status === "running" ? "animate-spin text-slate-400" : "text-slate-500 dark:text-slate-300"}`} />
+        <span>执行过程</span>
+        <ChevronDownIcon className="ml-auto size-3.5 text-slate-400" />
+      </div>
+      <div className="px-1 py-1">{children}</div>
+    </div>
+  );
+};
+
+const AgentIndicator: FC = () => {
+  return (
+    <div className="mt-2 flex items-center gap-2 text-[12px] text-slate-500 dark:text-slate-400">
+      <LoaderIcon className="size-3.5 animate-spin" />
+      <span>AI 正在继续处理...</span>
+    </div>
+  );
+};
+
 const AssistantMessage: FC = () => {
   return (
     <MessagePrimitive.Root
@@ -216,69 +268,12 @@ const AssistantMessage: FC = () => {
       data-role="assistant"
     >
       <div className="aui-assistant-message-content wrap-break-word rounded-2xl border border-slate-200/70 dark:border-slate-700/60 bg-white/80 dark:bg-slate-900/60 px-4 py-3 text-[13px] text-foreground leading-6 shadow-sm">
-        <MessagePrimitive.Parts
-          components={{
-            Text: MarkdownText,
-            tools: { Fallback: ToolFallback },
-          }}
-        />
+        <AssistantMessageParts />
         <MessageError />
       </div>
 
-      <div className="aui-assistant-message-footer mt-1 ml-2 flex">
-        <BranchPicker />
-        <AssistantActionBar />
-      </div>
+      <div className="aui-assistant-message-footer mt-1 ml-2 flex" />
     </MessagePrimitive.Root>
-  );
-};
-
-const AssistantActionBar: FC = () => {
-  return (
-    <ActionBarPrimitive.Root
-      hideWhenRunning
-      autohide="not-last"
-      autohideFloat="single-branch"
-      className="aui-assistant-action-bar-root col-start-3 row-start-2 -ml-1 flex gap-1 text-slate-400 data-floating:absolute data-floating:rounded-md data-floating:border data-floating:bg-white/90 data-floating:p-1 data-floating:shadow-sm dark:data-floating:bg-slate-900/90"
-    >
-      <ActionBarPrimitive.Copy asChild>
-        <TooltipIconButton tooltip="复制">
-          <AuiIf condition={(s) => s.message.isCopied}>
-            <CheckIcon />
-          </AuiIf>
-          <AuiIf condition={(s) => !s.message.isCopied}>
-            <CopyIcon />
-          </AuiIf>
-        </TooltipIconButton>
-      </ActionBarPrimitive.Copy>
-      <ActionBarPrimitive.Reload asChild>
-        <TooltipIconButton tooltip="刷新">
-          <RefreshCwIcon />
-        </TooltipIconButton>
-      </ActionBarPrimitive.Reload>
-      <ActionBarMorePrimitive.Root>
-        <ActionBarMorePrimitive.Trigger asChild>
-          <TooltipIconButton
-            tooltip="更多"
-            className="data-[state=open]:bg-accent"
-          >
-            <MoreHorizontalIcon />
-          </TooltipIconButton>
-        </ActionBarMorePrimitive.Trigger>
-        <ActionBarMorePrimitive.Content
-          side="bottom"
-          align="start"
-          className="aui-action-bar-more-content z-50 min-w-32 overflow-hidden rounded-md border bg-popover p-1 text-popover-foreground shadow-md"
-        >
-          <ActionBarPrimitive.ExportMarkdown asChild>
-            <ActionBarMorePrimitive.Item className="aui-action-bar-more-item flex cursor-pointer select-none items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-none hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground">
-              <DownloadIcon className="size-4" />
-              导出为 Markdown
-            </ActionBarMorePrimitive.Item>
-          </ActionBarPrimitive.ExportMarkdown>
-        </ActionBarMorePrimitive.Content>
-      </ActionBarMorePrimitive.Root>
-    </ActionBarPrimitive.Root>
   );
 };
 
@@ -294,29 +289,8 @@ const UserMessage: FC = () => {
         <div className="aui-user-message-content wrap-break-word rounded-2xl bg-slate-900 text-[13px] text-white dark:bg-slate-100 dark:text-slate-900 px-4 py-2.5 shadow-sm">
           <MessagePrimitive.Parts />
         </div>
-        <div className="aui-user-action-bar-wrapper absolute top-1/2 left-0 -translate-x-full -translate-y-1/2 pr-2">
-          <UserActionBar />
-        </div>
       </div>
-
-      <BranchPicker className="aui-user-branch-picker col-span-full col-start-1 row-start-3 -mr-1 justify-end" />
     </MessagePrimitive.Root>
-  );
-};
-
-const UserActionBar: FC = () => {
-  return (
-    <ActionBarPrimitive.Root
-      hideWhenRunning
-      autohide="not-last"
-      className="aui-user-action-bar-root flex flex-col items-end"
-    >
-      <ActionBarPrimitive.Edit asChild>
-        <TooltipIconButton tooltip="编辑" className="aui-user-action-edit p-4">
-          <PencilIcon />
-        </TooltipIconButton>
-      </ActionBarPrimitive.Edit>
-    </ActionBarPrimitive.Root>
   );
 };
 
@@ -340,35 +314,5 @@ const EditComposer: FC = () => {
         </div>
       </ComposerPrimitive.Root>
     </MessagePrimitive.Root>
-  );
-};
-
-const BranchPicker: FC<BranchPickerPrimitive.Root.Props> = ({
-  className,
-  ...rest
-}) => {
-  return (
-    <BranchPickerPrimitive.Root
-      hideWhenSingleBranch
-      className={cn(
-        "aui-branch-picker-root mr-2 -ml-2 inline-flex items-center text-slate-400 text-xs",
-        className,
-      )}
-      {...rest}
-    >
-      <BranchPickerPrimitive.Previous asChild>
-        <TooltipIconButton tooltip="上一个">
-          <ChevronLeftIcon />
-        </TooltipIconButton>
-      </BranchPickerPrimitive.Previous>
-      <span className="aui-branch-picker-state font-medium">
-        <BranchPickerPrimitive.Number /> / <BranchPickerPrimitive.Count />
-      </span>
-      <BranchPickerPrimitive.Next asChild>
-        <TooltipIconButton tooltip="下一个">
-          <ChevronRightIcon />
-        </TooltipIconButton>
-      </BranchPickerPrimitive.Next>
-    </BranchPickerPrimitive.Root>
   );
 };

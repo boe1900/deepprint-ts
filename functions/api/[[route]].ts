@@ -356,6 +356,15 @@ ${dataContent}
 \`\`\``
 }
 
+const aiStreamErrorMessage = (error: unknown) => {
+  const err = error as { message?: string; statusCode?: number; lastError?: { message?: string; statusCode?: number } }
+  const statusCode = err?.statusCode ?? err?.lastError?.statusCode
+  const message = err?.lastError?.message || err?.message || '上游服务异常'
+  return statusCode
+    ? `AI 请求失败（HTTP ${statusCode}）：${message}`
+    : `AI 请求失败：${message}`
+}
+
 // AI 生成端点
 app.post('/generate', requireAuth, async (c) => {
   try {
@@ -402,10 +411,15 @@ ${templateContextSection}`
       system: systemPrompt,
       messages: modelMessages,
       tools: clientTools,
+      providerOptions: providerType === 'openai' && apiMode === 'responses'
+        ? { openai: { store: false } }
+        : undefined,
       stopWhen: stepCountIs(6),
     })
 
-    return runGenerate(languageModel).toUIMessageStreamResponse()
+    return runGenerate(languageModel).toUIMessageStreamResponse({
+      onError: aiStreamErrorMessage,
+    })
   } catch (error) {
     console.error('Generate error:', error)
     return c.json(

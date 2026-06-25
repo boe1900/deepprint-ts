@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from 'react';
-import { PanelRightClose, Settings2, Sparkles } from 'lucide-react';
+import { AlertCircle, CheckCircle2, CircleDashed, Loader2, PanelRightClose, Settings2, Sparkles } from 'lucide-react';
 import { AssistantChatTransport, useChatRuntime } from '@assistant-ui/react-ai-sdk';
 import {
   AssistantRuntimeProvider,
@@ -30,12 +30,51 @@ export interface ChatPanelProps {
   initialMessages: Array<{ id?: string; role: string; parts: unknown[] }>;
   localAiConfig: LocalAIConfig | null;
   onPersistMessages: (templateId: string, messages: Array<{ role: string; parts: unknown[] }>) => Promise<void>;
-  onApplyAndValidate: (nextCode: string, nextData?: Record<string, unknown>) => Promise<CompileFeedback>;
+  onApplyAndValidate: (files: TemplateBundleFiles) => Promise<CompileFeedback>;
   onClose: () => void;
   onOpenSettings: () => void;
 }
 
 type UpdateTypstResult = CompileFeedback;
+
+type ToolStepState = 'pending' | 'active' | 'done' | 'error';
+
+const getToolErrorText = (status: { type: string; error?: unknown } | undefined, result: UpdateTypstResult | undefined) => {
+  if (result?.error) return result.error;
+  if (status?.type !== 'incomplete' || status.error === undefined) return null;
+  return typeof status.error === 'string' ? status.error : JSON.stringify(status.error);
+};
+
+const ToolStep = ({ label, detail, state }: { label: string; detail: string; state: ToolStepState }) => {
+  const Icon = state === 'active'
+    ? Loader2
+    : state === 'done'
+      ? CheckCircle2
+      : state === 'error'
+        ? AlertCircle
+        : CircleDashed;
+  const tone = state === 'active'
+    ? 'text-blue-600 dark:text-blue-300'
+    : state === 'done'
+      ? 'text-green-700 dark:text-green-300'
+      : state === 'error'
+        ? 'text-red-600 dark:text-red-300'
+        : 'text-slate-400 dark:text-slate-500';
+
+  return (
+    <li className="grid grid-cols-[16px_1fr] gap-2">
+      <Icon className={`mt-0.5 size-3.5 ${tone} ${state === 'active' ? 'animate-spin' : ''}`} />
+      <div>
+        <p className={`font-medium ${state === 'pending' ? 'text-slate-500 dark:text-slate-400' : 'text-slate-700 dark:text-slate-200'}`}>
+          {label}
+        </p>
+        <p className="mt-0.5 text-[11px] leading-4 text-slate-500 dark:text-slate-400">
+          {detail}
+        </p>
+      </div>
+    </li>
+  );
+};
 
 const ToolkitProvider = ({ toolkit, children }: { toolkit: Toolkit; children: React.ReactNode }) => {
   const parent = useAui();
@@ -48,9 +87,7 @@ const UpdateTypstToolCard: ToolCallMessagePartComponent<Record<string, unknown>,
   result,
   argsText,
 }) => {
-  const isRunning = status?.type === 'running';
-  const isComplete = status?.type === 'complete';
-  const isError = status?.type === 'incomplete' || result?.ok === false;
+  const statusType = status?.type ?? 'complete';
   let shortArgs: { files?: TemplateBundleFiles } | null = null;
   if (argsText) {
     try {
@@ -59,30 +96,86 @@ const UpdateTypstToolCard: ToolCallMessagePartComponent<Record<string, unknown>,
       shortArgs = null;
     }
   }
-  const codeLen = shortArgs?.files?.['template.typ']?.length ?? 0;
+  const files = shortArgs?.files && typeof shortArgs.files === 'object' ? shortArgs.files : undefined;
+  const argsReady = Boolean(files);
+  const templateLength = typeof files?.['template.typ'] === 'string' ? files['template.typ'].length : null;
+  const dataLength = typeof files?.['data.json'] === 'string' ? files['data.json'].length : null;
+  const fileCount = files ? Object.keys(files).length : 0;
+  const errorText = getToolErrorText(status, result);
+  const isRunning = statusType === 'running';
+  const compileFailed = statusType === 'incomplete' || result?.ok === false;
+  const compileSucceeded = result?.ok === true;
+  const isDraftingArgs = isRunning && !argsReady && result === undefined;
+  const isExecutingTool = isRunning && argsReady && result === undefined;
+  const badgeTone = compileFailed
+    ? 'bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-300'
+    : compileSucceeded
+      ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300'
+      : isExecutingTool
+        ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300'
+        : isDraftingArgs
+          ? 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300'
+          : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300';
+  const badgeLabel = compileFailed
+    ? '编译失败'
+    : compileSucceeded
+      ? '编译通过'
+      : isExecutingTool
+        ? '编译预览中'
+        : isDraftingArgs
+          ? '生成参数中'
+          : statusType === 'requires-action'
+            ? '等待确认'
+            : '待执行';
+  const argsDetail = argsReady
+    ? `${fileCount} 个文件已生成${templateLength !== null ? `，template.typ ${templateLength} 字符` : ''}`
+    : argsText
+      ? `正在流式接收工具参数，已接收 ${argsText.length} 字符`
+      : '等待模型生成完整 files map';
+  const executeDetail = compileFailed
+    ? 'Typst 诊断已返回给消息流，AI 会自动进入下一轮修复'
+    : compileSucceeded
+      ? 'Rust 渲染服务已完成校验，预览已更新'
+      : isExecutingTool
+        ? '正在调用 typst-json-render 编译 PNG 预览'
+        : '参数完整后会自动调用渲染校验';
 
   return (
     <div className="mx-auto w-full max-w-(--thread-max-width) px-2 py-2">
       <div className="rounded-xl border border-slate-200 dark:border-slate-700/60 bg-white dark:bg-slate-900 px-3 py-2 text-xs">
         <div className="flex items-center justify-between">
           <span className="font-semibold text-slate-700 dark:text-slate-200">应用模板修改</span>
-          <span className={`px-2 py-0.5 rounded-full text-[10px] ${isRunning
-            ? 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300'
-            : isError
-              ? 'bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-300'
-              : isComplete
-                ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300'
-                : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300'
-            }`}>
-            {isRunning ? '执行中' : isError ? '失败' : isComplete ? '完成' : '待执行'}
+          <span className={`px-2 py-0.5 rounded-full text-[10px] ${badgeTone}`}>
+            {badgeLabel}
           </span>
         </div>
-        <p className="mt-1 text-slate-500 dark:text-slate-400">
-          template.typ 长度 {codeLen} 字符
-        </p>
-        {result?.error && (
-          <p className="mt-1 text-red-600 dark:text-red-400" title={result.error}>
-            {briefErrorText(result.error)}
+
+        <ol className="mt-3 space-y-2">
+          <ToolStep
+            label="生成工具参数"
+            detail={argsDetail}
+            state={argsReady ? 'done' : isDraftingArgs ? 'active' : 'pending'}
+          />
+          <ToolStep
+            label="调用渲染校验"
+            detail={executeDetail}
+            state={compileFailed ? 'error' : compileSucceeded ? 'done' : isExecutingTool ? 'active' : 'pending'}
+          />
+          <ToolStep
+            label="回传结果"
+            detail={compileFailed ? '保留诊断信息，继续交给 AI 修复' : compileSucceeded ? '模板和测试数据已应用到当前工作区' : '等待工具返回'}
+            state={compileFailed ? 'error' : compileSucceeded ? 'done' : 'pending'}
+          />
+        </ol>
+
+        {argsReady && (
+          <p className="mt-2 text-[11px] text-slate-500 dark:text-slate-400">
+            {dataLength !== null ? `data.json ${dataLength} 字符` : '未检测到 data.json'}
+          </p>
+        )}
+        {errorText && (
+          <p className="mt-2 text-red-600 dark:text-red-400" title={errorText}>
+            {briefErrorText(errorText)}
           </p>
         )}
         {result?.diagnostics?.line && (
@@ -161,7 +254,7 @@ export default function ChatPanel({
         }
 
         setAgentStatus(hasFailedOnce ? 'repairing' : 'compiling');
-        const compileResult = await onApplyAndValidate(nextCode, nextData);
+        const compileResult = await onApplyAndValidate(files);
         if (compileResult.ok) {
           setAgentStatus('success');
           setHasFailedOnce(false);
@@ -175,7 +268,7 @@ export default function ChatPanel({
         setLastCompileDiagnostics(compileResult.diagnostics || {
           message: compileResult.error || '编译失败',
         });
-        return { ok: false, error: compileResult.error || '编译失败' };
+        return compileResult;
       },
     },
   }), [activeTemplateId, currentCode, currentData, hasFailedOnce, onApplyAndValidate]);
@@ -185,7 +278,7 @@ export default function ChatPanel({
     transport: new AssistantChatTransport({
       api: '/api/generate',
       prepareSendMessagesRequest: async (options) => {
-        if (String(options.trigger || '').includes('submit')) {
+        if (options.trigger === 'submit-message' && options.messages.at(-1)?.role === 'user') {
           autoToolLoopCountRef.current = 0;
         }
         return {
@@ -228,7 +321,7 @@ export default function ChatPanel({
   });
 
   return (
-    <div className="w-[360px] h-full flex flex-col bg-slate-50 dark:bg-slate-900 border-l border-slate-200 dark:border-slate-700/60 flex-shrink-0">
+    <div className="w-[460px] h-full flex flex-col bg-slate-50 dark:bg-slate-900 border-l border-slate-200 dark:border-slate-700/60 flex-shrink-0">
       <div className="h-14 flex-shrink-0 border-b border-slate-200/70 dark:border-slate-700/60 flex items-center px-4 gap-3 bg-white/80 dark:bg-slate-900/80 backdrop-blur">
         <div className="w-9 h-9 bg-slate-900 dark:bg-white rounded-xl flex items-center justify-center text-white dark:text-slate-900 shadow-sm">
           <Sparkles size={18} />

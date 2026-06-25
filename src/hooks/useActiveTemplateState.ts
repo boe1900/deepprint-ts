@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '@/lib/api-client';
-import { getBundleData, getBundleTemplate, toTemplateBundleFiles } from '@/lib/template-bundle';
+import { getBundleData, getBundleTemplate, toTemplateBundleFiles, type TemplateBundleFiles } from '@/lib/template-bundle';
 
 type ChatSeedMessage = { id?: string; role: string; parts: unknown[] };
 
@@ -16,6 +16,7 @@ export function useActiveTemplateState({
   const [activeTemplateId, setActiveTemplateId] = useState('');
   const [code, setCode] = useState(defaultCode);
   const [data, setData] = useState<Record<string, unknown>>(defaultData);
+  const [bundleFiles, setBundleFiles] = useState<TemplateBundleFiles>(() => toTemplateBundleFiles(undefined, defaultCode, defaultData));
   const [chatSeedMessages, setChatSeedMessages] = useState<ChatSeedMessage[]>([]);
   const [chatSeedVersion, setChatSeedVersion] = useState(0);
   const selectTemplateSeqRef = useRef(0);
@@ -31,6 +32,7 @@ export function useActiveTemplateState({
     setActiveTemplateId('');
     setCode(defaultCode);
     setData(defaultData);
+    setBundleFiles(toTemplateBundleFiles(undefined, defaultCode, defaultData));
     setChatSeedMessages([]);
     setChatSeedVersion((version) => version + 1);
   }, [defaultCode, defaultData]);
@@ -57,6 +59,7 @@ export function useActiveTemplateState({
       const nextData = getBundleData(files);
       setCode(nextCode);
       setData(Object.keys(nextData).length > 0 ? nextData : defaultData);
+      setBundleFiles(files);
       setChatSeedMessages(thread.messages.map((message) => ({
         id: message.id,
         role: message.role,
@@ -80,10 +83,12 @@ export function useActiveTemplateState({
     chatSeedVersion,
     code,
     data,
+    bundleFiles,
     hasActiveTemplate: !!activeTemplateId,
     resetActiveTemplate,
     selectTemplate,
     setCode,
     setData,
+    setBundleFiles,
   };
 }

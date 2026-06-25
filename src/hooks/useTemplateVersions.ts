@@ -1,7 +1,7 @@
 import { type RefObject, useCallback, useState } from 'react';
 import { api, type TemplateVersion } from '@/lib/api-client';
 import { type TypstPreviewRef } from '@/components/TypstPreview';
-import { getBundleData, getBundleTemplate, toTemplateBundleFiles } from '@/lib/template-bundle';
+import { getBundleData, getBundleTemplate, toTemplateBundleFiles, type TemplateBundleFiles } from '@/lib/template-bundle';
 
 interface UseTemplateVersionsParams {
   activeTemplateId: string;
@@ -10,6 +10,7 @@ interface UseTemplateVersionsParams {
   previewRef: RefObject<TypstPreviewRef | null>;
   setCode: (code: string) => void;
   setData: (data: Record<string, unknown>) => void;
+  setBundleFiles: (files: TemplateBundleFiles) => void;
 }
 
 export function useTemplateVersions({
@@ -19,6 +20,7 @@ export function useTemplateVersions({
   previewRef,
   setCode,
   setData,
+  setBundleFiles,
 }: UseTemplateVersionsParams) {
   const [showVersionsDialog, setShowVersionsDialog] = useState(false);
   const [versions, setVersions] = useState<TemplateVersion[]>([]);
@@ -56,6 +58,7 @@ export function useTemplateVersions({
 
       setCode(nextCode);
       setData(Object.keys(nextData).length > 0 ? nextData : defaultData);
+      setBundleFiles(files);
 
       if (previewRef.current) {
         await previewRef.current.compileAndGetError(nextCode, nextData, true);
@@ -68,7 +71,7 @@ export function useTemplateVersions({
     } finally {
       setIsRestoringVersion(false);
     }
-  }, [activeTemplateId, defaultCode, defaultData, loadVersions, previewRef, setCode, setData]);
+  }, [activeTemplateId, defaultCode, defaultData, loadVersions, previewRef, setBundleFiles, setCode, setData]);
 
   return {
     dialog: {

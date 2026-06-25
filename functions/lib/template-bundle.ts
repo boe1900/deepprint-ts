@@ -12,9 +12,7 @@ export const DEFAULT_TEMPLATE_BUNDLE_FILES: TemplateBundleFiles = {
     entry: 'template.typ',
     data: 'data.json',
     data_schema: 'data.schema.json',
-    data_contract: {
-      description: 'Generic starter data contract',
-    },
+    data_contract: 'generic.v1',
   }, null, 2),
   'template.typ': `#let data = json("data.json")
 
