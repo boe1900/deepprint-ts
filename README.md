@@ -4,7 +4,7 @@ DeepPrint TS 是一个面向 Typst 模板生产的实验性工作台：你可以
 
 项目状态：`alpha / experimental`
 
-> 新开发路线已经切到 Docker + PostgreSQL + `typst-json-render` 渲染服务。详见 [DeepPrint TS Restart Plan V1](./docs/restart-plan-v1.md)。
+> 新开发路线已经切到 Docker + PostgreSQL + `typst-json-render` 渲染服务。详见 [DeepPrint TS Restart Plan V1](./docs/restart-plan-v1.md) 和 [DeepPrint Template Memory V1](./docs/template-memory-v1.md)。
 
 ## 它现在已经能做什么
 

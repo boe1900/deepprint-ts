@@ -39,6 +39,8 @@ Build only the base loop:
 
 Do not build self-upgrading memory, template sharing, marketplace, promotion, or component mining in V1.
 
+Template Memory 已经从 `typst-json-render` 边界迁移到 DeepPrint 产品层设计。后续实现见 [DeepPrint Template Memory V1](./template-memory-v1.md)。
+
 ## 3. Template Storage
 
 Stop treating a template as only `typst_code + mock_data`.
