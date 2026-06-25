@@ -370,20 +370,32 @@ export default function DeepPrintStudio() {
 
   // AI 工具回调：应用代码并立即编译，返回给模型用于自动修复循环
   const handleApplyAndValidateFromAi = useCallback(async (files: TemplateBundleFiles) => {
+    const steps = [];
     const nextCode = getBundleTemplate(files);
     const nextData = getBundleData(files);
     const mergedData = Object.keys(nextData).length > 0 ? nextData : data;
     if (!previewRef.current) {
-      return { ok: false, error: '预览引擎未就绪' };
+      steps.push({ label: '渲染校验', detail: '预览引擎未就绪', state: 'error' as const });
+      return {
+        ok: false,
+        error: '预览引擎未就绪',
+        steps,
+      };
     }
     const compileResult = await previewRef.current.compileAndGetError(nextCode, mergedData, true);
     if (!compileResult.ok) {
-      return compileResult;
+      steps.push({ label: '渲染校验', detail: '编译失败，等待 AI 修复', state: 'error' as const, error: compileResult.error });
+      return {
+        ...compileResult,
+        steps,
+      };
     }
+    steps.push({ label: '渲染校验', detail: '编译通过，预览已更新', state: 'done' as const });
 
     setCode(nextCode);
     setData(mergedData);
     setBundleFiles(files);
+    steps.push({ label: '应用结果', detail: '模板和测试数据已应用到当前工作区', state: 'done' as const });
 
     if (compileResult.ok && activeTemplateId) {
       try {
@@ -394,6 +406,7 @@ export default function DeepPrintStudio() {
           update_source: 'ai',
           update_summary: 'AI 应用模板修改',
         });
+        steps.push({ label: '保存结果', detail: '已保存到当前模板', state: 'done' as const });
       } catch (err) {
         if (err instanceof ApiError && err.status === 429) {
           setCode(code);
@@ -401,13 +414,18 @@ export default function DeepPrintStudio() {
           setBundleFiles(bundleFiles);
           void previewRef.current.compileAndGetError(code, data, true);
         }
+        steps.push({ label: '保存结果', detail: '持久化失败', state: 'error' as const });
         return {
           ok: false,
           error: err instanceof Error ? err.message : 'AI 修改已应用，但持久化失败',
+          steps,
         };
       }
     }
-    return compileResult;
+    return {
+      ...compileResult,
+      steps,
+    };
   }, [activeTemplateId, bundleFiles, code, data, setBundleFiles, setCode, setData]);
 
   return (

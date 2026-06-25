@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from 'react';
-import { AlertCircle, CheckCircle2, CircleDashed, Loader2, PanelRightClose, Settings2, Sparkles } from 'lucide-react';
+import { PanelRightClose, Settings2, Sparkles } from 'lucide-react';
 import { AssistantChatTransport, useChatRuntime } from '@assistant-ui/react-ai-sdk';
 import {
   AssistantRuntimeProvider,
@@ -12,8 +12,8 @@ import {
 } from '@assistant-ui/react';
 import { lastAssistantMessageIsCompleteWithToolCalls } from 'ai';
 import { Thread } from '@/components/assistant-ui/thread';
+import { ToolExecutionCard } from '@/components/assistant-ui/tool-execution-card';
 import { TooltipProvider } from '@/components/ui/tooltip';
-import { briefErrorText } from '@/lib/brief-error-text';
 import type { CompileFeedback } from '@/components/TypstPreview';
 import { DEFAULT_TEMPLATE_BUNDLE_FILES, getBundleData, getBundleTemplate, toTemplateBundleFiles, type TemplateBundleFiles } from '@/lib/template-bundle';
 import {
@@ -37,43 +37,12 @@ export interface ChatPanelProps {
 
 type UpdateTypstResult = CompileFeedback;
 
-type ToolStepState = 'pending' | 'active' | 'done' | 'error';
-
 const getToolErrorText = (status: { type: string; error?: unknown } | undefined, result: UpdateTypstResult | undefined) => {
+  const stepError = result?.steps?.find((step) => step.error)?.error;
+  if (stepError) return stepError;
   if (result?.error) return result.error;
   if (status?.type !== 'incomplete' || status.error === undefined) return null;
   return typeof status.error === 'string' ? status.error : JSON.stringify(status.error);
-};
-
-const ToolStep = ({ label, detail, state }: { label: string; detail: string; state: ToolStepState }) => {
-  const Icon = state === 'active'
-    ? Loader2
-    : state === 'done'
-      ? CheckCircle2
-      : state === 'error'
-        ? AlertCircle
-        : CircleDashed;
-  const tone = state === 'active'
-    ? 'text-blue-600 dark:text-blue-300'
-    : state === 'done'
-      ? 'text-green-700 dark:text-green-300'
-      : state === 'error'
-        ? 'text-red-600 dark:text-red-300'
-        : 'text-slate-400 dark:text-slate-500';
-
-  return (
-    <li className="grid grid-cols-[16px_1fr] gap-2">
-      <Icon className={`mt-0.5 size-3.5 ${tone} ${state === 'active' ? 'animate-spin' : ''}`} />
-      <div>
-        <p className={`font-medium ${state === 'pending' ? 'text-slate-500 dark:text-slate-400' : 'text-slate-700 dark:text-slate-200'}`}>
-          {label}
-        </p>
-        <p className="mt-0.5 text-[11px] leading-4 text-slate-500 dark:text-slate-400">
-          {detail}
-        </p>
-      </div>
-    </li>
-  );
 };
 
 const ToolkitProvider = ({ toolkit, children }: { toolkit: Toolkit; children: React.ReactNode }) => {
@@ -98,8 +67,6 @@ const UpdateTypstToolCard: ToolCallMessagePartComponent<Record<string, unknown>,
   }
   const files = shortArgs?.files && typeof shortArgs.files === 'object' ? shortArgs.files : undefined;
   const argsReady = Boolean(files);
-  const templateLength = typeof files?.['template.typ'] === 'string' ? files['template.typ'].length : null;
-  const dataLength = typeof files?.['data.json'] === 'string' ? files['data.json'].length : null;
   const fileCount = files ? Object.keys(files).length : 0;
   const errorText = getToolErrorText(status, result);
   const isRunning = statusType === 'running';
@@ -128,65 +95,30 @@ const UpdateTypstToolCard: ToolCallMessagePartComponent<Record<string, unknown>,
             ? '等待确认'
             : '待执行';
   const argsDetail = argsReady
-    ? `${fileCount} 个文件已生成${templateLength !== null ? `，template.typ ${templateLength} 字符` : ''}`
+    ? `${fileCount} 个文件已生成`
     : argsText
       ? `正在流式接收工具参数，已接收 ${argsText.length} 字符`
       : '等待模型生成完整 files map';
-  const executeDetail = compileFailed
-    ? 'Typst 诊断已返回给消息流，AI 会自动进入下一轮修复'
-    : compileSucceeded
-      ? 'Rust 渲染服务已完成校验，预览已更新'
-      : isExecutingTool
-        ? '正在调用 typst-json-render 编译 PNG 预览'
-        : '参数完整后会自动调用渲染校验';
+  const steps = result?.steps ?? [];
 
   return (
-    <div className="mx-auto w-full max-w-(--thread-max-width) px-2 py-2">
-      <div className="rounded-xl border border-slate-200 dark:border-slate-700/60 bg-white dark:bg-slate-900 px-3 py-2 text-xs">
-        <div className="flex items-center justify-between">
-          <span className="font-semibold text-slate-700 dark:text-slate-200">应用模板修改</span>
-          <span className={`px-2 py-0.5 rounded-full text-[10px] ${badgeTone}`}>
-            {badgeLabel}
-          </span>
-        </div>
-
-        <ol className="mt-3 space-y-2">
-          <ToolStep
-            label="生成工具参数"
-            detail={argsDetail}
-            state={argsReady ? 'done' : isDraftingArgs ? 'active' : 'pending'}
-          />
-          <ToolStep
-            label="调用渲染校验"
-            detail={executeDetail}
-            state={compileFailed ? 'error' : compileSucceeded ? 'done' : isExecutingTool ? 'active' : 'pending'}
-          />
-          <ToolStep
-            label="回传结果"
-            detail={compileFailed ? '保留诊断信息，继续交给 AI 修复' : compileSucceeded ? '模板和测试数据已应用到当前工作区' : '等待工具返回'}
-            state={compileFailed ? 'error' : compileSucceeded ? 'done' : 'pending'}
-          />
-        </ol>
-
-        {argsReady && (
-          <p className="mt-2 text-[11px] text-slate-500 dark:text-slate-400">
-            {dataLength !== null ? `data.json ${dataLength} 字符` : '未检测到 data.json'}
-          </p>
-        )}
-        {errorText && (
-          <p className="mt-2 text-red-600 dark:text-red-400" title={errorText}>
-            {briefErrorText(errorText)}
-          </p>
-        )}
-        {result?.diagnostics?.line && (
-          <p className="mt-1 text-red-500 dark:text-red-400">
-            行 {result.diagnostics.line}
-            {result.diagnostics.column ? `, 列 ${result.diagnostics.column}` : ''}
-            {result.diagnostics.snippet ? ` · ${result.diagnostics.snippet}` : ''}
-          </p>
-        )}
-      </div>
-    </div>
+    <ToolExecutionCard
+      title="应用模板修改"
+      badgeLabel={badgeLabel}
+      badgeTone={badgeTone}
+      prepareStep={{
+        label: '生成工具参数',
+        detail: argsDetail,
+        state: argsReady ? 'done' : isDraftingArgs ? 'active' : 'pending',
+      }}
+      runningStep={isExecutingTool ? {
+        label: '调用工具',
+        detail: '正在执行模板编译',
+        state: 'active',
+      } : undefined}
+      steps={steps}
+      errorText={errorText}
+    />
   );
 };
 
@@ -203,7 +135,6 @@ export default function ChatPanel({
 }: ChatPanelProps) {
   const [agentStatus, setAgentStatus] = useState<'idle' | 'compiling' | 'repairing' | 'success' | 'error'>('idle');
   const [hasFailedOnce, setHasFailedOnce] = useState(false);
-  const [lastCompileDiagnostics, setLastCompileDiagnostics] = useState<CompileFeedback['diagnostics'] | null>(null);
   const autoToolLoopCountRef = useRef(0);
   const hasLocalAiConfig = isLocalAIConfigReady(localAiConfig);
   const requestScopedAiConfig = hasLocalAiConfig ? toRequestScopedAIConfig(localAiConfig) : undefined;
@@ -258,16 +189,12 @@ export default function ChatPanel({
         if (compileResult.ok) {
           setAgentStatus('success');
           setHasFailedOnce(false);
-          setLastCompileDiagnostics(null);
           autoToolLoopCountRef.current = 0;
           return compileResult;
         }
 
         setAgentStatus('error');
         setHasFailedOnce(true);
-        setLastCompileDiagnostics(compileResult.diagnostics || {
-          message: compileResult.error || '编译失败',
-        });
         return compileResult;
       },
     },
@@ -376,20 +303,6 @@ export default function ChatPanel({
           >
             配置本地 AI
           </button>
-        </div>
-      )}
-
-      {agentStatus === 'error' && lastCompileDiagnostics?.message && (
-        <div
-          className="px-4 py-2 text-[11px] text-red-600 dark:text-red-400 border-b border-red-100 dark:border-red-900/40 bg-red-50/70 dark:bg-red-950/20"
-          title={lastCompileDiagnostics.message}
-        >
-          最近编译错误
-          {lastCompileDiagnostics.line ? `（行 ${lastCompileDiagnostics.line}` : ''}
-          {lastCompileDiagnostics.column ? `, 列 ${lastCompileDiagnostics.column}` : ''}
-          {lastCompileDiagnostics.line ? '）' : ''}
-          ：{lastCompileDiagnostics.message}
-          {lastCompileDiagnostics.snippet ? ` · ${lastCompileDiagnostics.snippet}` : ''}
         </div>
       )}
 

@@ -3,6 +3,7 @@ import { AlertCircle, Eye, Loader2 } from 'lucide-react';
 import { api } from '@/lib/api-client';
 import { briefErrorText } from '@/lib/brief-error-text';
 import { toTemplateBundleFiles } from '@/lib/template-bundle';
+import type { ToolExecutionStep } from '@/components/assistant-ui/tool-execution-card';
 
 export interface TypstPreviewRef {
   zoom: number;
@@ -18,9 +19,12 @@ export interface TypstPreviewRef {
   ) => Promise<CompileFeedback>;
 }
 
+export type CompileFeedbackStep = ToolExecutionStep;
+
 export type CompileFeedback = {
   ok: boolean;
   error?: string;
+  steps?: CompileFeedbackStep[];
   diagnostics?: {
     message: string;
     line?: number;

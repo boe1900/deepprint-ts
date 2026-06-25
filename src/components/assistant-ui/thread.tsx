@@ -19,9 +19,6 @@ import {
 import {
   ArrowDownIcon,
   ArrowUpIcon,
-  AlertCircleIcon,
-  ChevronDownIcon,
-  CheckCircle2Icon,
   LoaderIcon,
   SquareIcon,
 } from "lucide-react";
@@ -217,7 +214,7 @@ const AssistantMessageParts: FC = () => {
           case "text":
             return <MarkdownText />;
           case "group-process":
-            return <AgentProcess status={part.status.type}>{children}</AgentProcess>;
+            return <div className="my-2 space-y-2">{children}</div>;
           case "group-reasoning":
           case "group-tool":
             return <div className="space-y-2">{children}</div>;
@@ -230,25 +227,6 @@ const AssistantMessageParts: FC = () => {
         }
       }}
     </MessagePrimitive.GroupedParts>
-  );
-};
-
-const AgentProcess: FC<{ children: React.ReactNode; status: string }> = ({ children, status }) => {
-  const Icon = status === "running"
-    ? LoaderIcon
-    : status === "incomplete"
-      ? AlertCircleIcon
-      : CheckCircle2Icon;
-
-  return (
-    <div className="my-2 rounded-xl border border-slate-200 dark:border-slate-700/60 bg-slate-50/70 dark:bg-slate-950/30">
-      <div className="flex items-center gap-2 border-b border-slate-200/70 dark:border-slate-700/60 px-3 py-2 text-[12px] font-semibold text-slate-600 dark:text-slate-300">
-        <Icon className={`size-3.5 ${status === "running" ? "animate-spin text-slate-400" : "text-slate-500 dark:text-slate-300"}`} />
-        <span>执行过程</span>
-        <ChevronDownIcon className="ml-auto size-3.5 text-slate-400" />
-      </div>
-      <div className="px-1 py-1">{children}</div>
-    </div>
   );
 };
 
