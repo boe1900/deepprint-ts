@@ -51,19 +51,40 @@ type ReadTemplateFileResult = {
   endLine?: number;
   content?: string;
   plainContent?: string;
+  didModify?: boolean;
+  reminder?: string;
   error?: string;
 };
 
 const TOOL_HISTORY_KEEP_MESSAGES = 12;
 const MAX_TEXT_PART_CHARS = 1200;
+const LEGACY_TEMPLATE_EDIT_TOOL_TYPES = new Set([
+  'tool-edit_template_bundle_file',
+  'tool-edit_template_bundle_file_range',
+  'tool-patch_template_bundle',
+]);
+const LEGACY_REVISION_NOTE = '[历史旧版编辑工具状态已归档；当前模板编辑不再使用 revision，请以当前 TemplateBundle 快照为准。]';
+const LEGACY_REVISION_PATTERN = /expectedRevision|currentRevision|workspaceRevision|当前 revision|版本已过期|已经分叉|File has changed since read|File has not been read yet|Call read_template_bundle_file/i;
+const MUTATING_TEMPLATE_TOOL_TYPES = new Set([
+  'tool-update_template_bundle',
+  'tool-apply_template_bundle_patch',
+]);
+
+const sanitizeHistoricalText = (value: string, role?: string) => {
+  if (role === 'user') return value;
+  return LEGACY_REVISION_PATTERN.test(value) ? LEGACY_REVISION_NOTE : value;
+};
 
 const summarizeToolPart = (part: Record<string, unknown>) => {
   const type = typeof part.type === 'string' ? part.type : 'tool';
+  if (LEGACY_TEMPLATE_EDIT_TOOL_TYPES.has(type)) {
+    return { type: 'text', text: LEGACY_REVISION_NOTE };
+  }
   const input = part.input && typeof part.input === 'object' ? part.input as Record<string, unknown> : {};
   const output = part.output && typeof part.output === 'object' ? part.output as Record<string, unknown> : undefined;
   const file = typeof input.file === 'string' ? input.file : typeof output?.file === 'string' ? output.file : undefined;
   const ok = typeof output?.ok === 'boolean' ? output.ok : undefined;
-  const error = typeof output?.error === 'string' ? output.error : undefined;
+  const error = typeof output?.error === 'string' ? sanitizeHistoricalText(output.error) : undefined;
   const changedFiles = Array.isArray(output?.changedFiles) ? output.changedFiles.filter((item): item is string => typeof item === 'string') : [];
   const fileCount = input.files && typeof input.files === 'object' ? Object.keys(input.files as Record<string, unknown>).length : undefined;
   const starterId = typeof input.starterId === 'string' ? input.starterId : undefined;
@@ -85,13 +106,20 @@ const summarizeToolPart = (part: Record<string, unknown>) => {
   };
 };
 
-const compactMessageParts = (parts: unknown[], keepToolDetails: boolean) => parts
+const compactMessageParts = (parts: unknown[], keepToolDetails: boolean, role?: string) => parts
   .map((part) => {
     if (!part || typeof part !== 'object') return part;
     const record = part as Record<string, unknown>;
     const type = typeof record.type === 'string' ? record.type : '';
-    if (type === 'text' && typeof record.text === 'string' && record.text.length > MAX_TEXT_PART_CHARS) {
-      return { ...record, text: `${record.text.slice(0, MAX_TEXT_PART_CHARS)}\n\n[历史消息已截断]` };
+    if (type === 'text' && typeof record.text === 'string') {
+      const text = sanitizeHistoricalText(record.text, role);
+      if (text.length > MAX_TEXT_PART_CHARS) {
+        return { ...record, text: `${text.slice(0, MAX_TEXT_PART_CHARS)}\n\n[历史消息已截断]` };
+      }
+      return text === record.text ? record : { ...record, text };
+    }
+    if (LEGACY_TEMPLATE_EDIT_TOOL_TYPES.has(type)) {
+      return { type: 'text', text: LEGACY_REVISION_NOTE };
     }
     if (type.startsWith('tool-') && !keepToolDetails) {
       return summarizeToolPart(record);
@@ -111,6 +139,7 @@ const compactMessagesForHistory = (messages: any[], keepRecentToolDetails: boole
     parts: compactMessageParts(
       Array.isArray(chatMessage?.parts) ? chatMessage.parts : [],
       index >= firstToolMessageToKeep,
+      typeof chatMessage?.role === 'string' ? chatMessage.role : undefined,
     ),
   }));
 };
@@ -124,13 +153,18 @@ const stripFilesFromCompileFeedback = (result: CompileFeedback): CompileFeedback
   return nextResult;
 };
 
-const hasFailedToolResult = (messages: any[]) => {
-  for (const message of [...(messages || [])].reverse()) {
+const messagesSinceLatestUser = (messages: any[]) => {
+  const latestUserIndex = [...(messages || [])].map((message) => message?.role).lastIndexOf('user');
+  return latestUserIndex >= 0 ? messages.slice(latestUserIndex + 1) : messages;
+};
+
+const hasUnresolvedFailedTemplateMutation = (messages: any[]) => {
+  for (const message of [...messagesSinceLatestUser(messages)].reverse()) {
     const parts = Array.isArray(message?.parts) ? message.parts : [];
     for (const part of [...parts].reverse()) {
       if (!part || typeof part !== 'object') continue;
       const record = part as Record<string, unknown>;
-      if (typeof record.type !== 'string' || !record.type.startsWith('tool-')) continue;
+      if (typeof record.type !== 'string' || !MUTATING_TEMPLATE_TOOL_TYPES.has(record.type)) continue;
       const output = record.output;
       if (output && typeof output === 'object' && (output as Record<string, unknown>).ok === false) {
         return true;
@@ -383,6 +417,8 @@ const readBundleFileLines = (
     endLine: end,
     content: numbered,
     plainContent,
+    didModify: false,
+    reminder: '读取文件不会修改模板；如果用户要求变更，必须继续调用 apply_template_bundle_patch 或 update_template_bundle，且只有修改工具 ok=true 后才能说已经修正。',
   };
 };
 
@@ -406,6 +442,10 @@ export default function ChatPanel({
   const providerLabel = hasLocalAiConfig
     ? `${getLocalAIProviderLabel(localAiConfig.providerType)} · 本地用户 Key`
     : '未配置本地 AI';
+  const runtimeInitialMessages = useMemo(
+    () => compactMessagesForHistory(initialMessages as any[], true),
+    [initialMessages],
+  );
   const workspaceSnapshotRef = useRef<TemplateBundleFiles>(mergeTemplateBundleState(currentBundleFiles, currentCode, currentData));
   const isApplyingToolRef = useRef(false);
 
@@ -593,7 +633,7 @@ export default function ChatPanel({
   }), [activeTemplateId, applyEditAndCompile, hasFailedOnce, onApplyAndValidate]);
 
   const runtime = useChatRuntime({
-    messages: initialMessages as any,
+    messages: runtimeInitialMessages as any,
     transport: new AssistantChatTransport({
       api: '/api/generate',
       prepareSendMessagesRequest: async (options) => {
@@ -621,13 +661,14 @@ export default function ChatPanel({
       },
     }),
     sendAutomaticallyWhen: ({ messages }) => {
-      const shouldContinue = lastAssistantMessageIsCompleteWithToolCalls({ messages: messages as any });
+      const shouldContinue = lastAssistantMessageIsCompleteWithToolCalls({ messages: messages as any })
+        || hasUnresolvedFailedTemplateMutation(messages as any[]);
       if (!shouldContinue) return false;
       autoToolLoopCountRef.current += 1;
       return autoToolLoopCountRef.current <= 8;
     },
     onFinish: async ({ messages }) => {
-      if (hasFailedToolResult(messages as any[])) {
+      if (hasUnresolvedFailedTemplateMutation(messages as any[])) {
         setAgentStatus('error');
         setHasFailedOnce(true);
       }

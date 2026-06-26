@@ -414,10 +414,13 @@ export default function DeepPrintStudio() {
     setBundleFiles(normalizedFiles);
     steps.push({ label: '应用草稿', detail: '模板和测试数据已应用到当前工作区，正在编译校验', state: 'done' as const });
 
-    const compileResult = await compileTemplateBundleForFeedback(normalizedFiles, nextCode, {
-      format: 'png',
-      includeArtifactBase64: false,
-    });
+    const previewIsMounted = Boolean(previewRef.current);
+    const compileResult = previewRef.current
+      ? await previewRef.current.compileAndGetError(nextCode, mergedData, false, normalizedFiles)
+      : await compileTemplateBundleForFeedback(normalizedFiles, nextCode, {
+        format: 'png',
+        includeArtifactBase64: false,
+      });
     if (!compileResult.ok) {
       steps.push({ label: '渲染校验', detail: '编译失败，等待 AI 修复', state: 'error' as const, error: compileResult.error });
       return {
@@ -426,7 +429,11 @@ export default function DeepPrintStudio() {
         steps,
       };
     }
-    steps.push({ label: '渲染校验', detail: '编译通过，预览已更新', state: 'done' as const });
+    steps.push({
+      label: '渲染校验',
+      detail: previewIsMounted ? '编译通过，预览已刷新' : '编译通过，切换到预览后会刷新',
+      state: 'done' as const,
+    });
 
     if (compileResult.ok && activeTemplateId) {
       try {
@@ -458,7 +465,7 @@ export default function DeepPrintStudio() {
       files: normalizedFiles,
       steps,
     };
-  }, [activeTemplateId, bundleFiles, code, data, setBundleFiles, setCode, setData]);
+  }, [activeTemplateId, bundleFiles, code, data, previewRef, setBundleFiles, setCode, setData]);
 
   return (
     <div className="flex h-screen bg-white dark:bg-slate-900 text-slate-900 dark:text-white overflow-hidden transition-colors">

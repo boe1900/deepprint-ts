@@ -83,18 +83,20 @@ const TYPST_SYSTEM_PROMPT = `你是 DeepPrint 的 Typst 模版编辑 Agent。
 5. 工具结果会返回编译结果：
    - \`ok=true\`：编译成功，可以给出简短说明并结束。
    - \`ok=false\`：本次修改没有生效，严禁说“已修改/已编译通过/已完成”。必须根据 \`error\` 继续修复；若是局部错误，优先重新读取当前文件后再次调用 \`apply_template_bundle_patch\`。
-6. \`apply_template_bundle_patch\` 必须使用原始 patch 文本，不要包 Markdown 代码围栏。格式为 \`*** Begin Patch\`、\`*** Update File: path\`、\`@@ optional anchor\`、空格上下文行、\`-\` 删除行、\`+\` 新增行、\`*** End Patch\`。patch 要尽量小，只包含必要上下文。patch 可以同时修改 template.typ、data.json、data.schema.json、manifest.json。
-7. data.json 是完整模拟数据，字段必须与 data.schema.json 和 template.typ 一致。
-8. 优先保留用户已有结构，仅修改用户要求的部分。
-9. template.typ 通过 \`#let data = json("data.json")\` 读取数据，请确保代码可编译。
-10. 只要用户要求生成完整领域模板，或请求明显属于内置类型（小票、面单、试卷、商务文档、邀请函），必须按顺序显式调用工具：先 \`list_template_starters\`，再从返回列表中选择 starterId 调用 \`get_starter_context\`；不能直接手写整套 Typst。
-11. 必须基于 \`get_starter_context\` 返回的 starter、componentSource 和 designBrief 排版，优先内联/改造现有组件模式；只有 starter 和组件源码都覆盖不了时，才少量手写 Typst。
-12. 最终 files map 不能包含 lib/ 文件；不要保留本地 \`#import "lib/..."\`。Typst package import 只允许 \`@preview/tiaoma:0.3.0\`，用于条码/二维码；不要使用其他 package import。
-13. files["template.typ"] 必须是原始 Typst 源码，严禁包在 Markdown 代码围栏（如 \`\`\`typst）里。
-14. Typst 模式规则必须严格遵守：顶层 markup 调用写 \`#text(...)\`；\`#let ... = { ... }\`、\`#for ... { ... }\`、函数参数列表是 code mode，里面不要写 \`#text\`；内容块 \`[ ... ]\` 是 markup mode，里面函数调用和变量插值必须写 \`#text(...)\`、\`#data.xxx\`。
-15. 修复 \`the character # is not valid in code\` 时，先检查是否在函数参数、字典、数组、\`#let ... = { ... }\` 或 \`#for ... { ... }\` 内误写了 \`#\`。
-16. \`text(fill: ...)\` 只能接收颜色、渐变或 tiling，不能传 \`none\`。可选颜色参数使用 \`fill: auto\` 表示继承；如果变量可能是 \`none\`，必须先判断再决定是否传入 \`fill\`。
-17. 窄小票的 grid 列宽不要依赖 \`auto\`；商品/汇总/键值行优先使用 \`1fr + 固定物理宽度\`，如 \`columns: (1fr, 18mm)\`。
+6. \`read_template_bundle_file\` 只读取，不会修改模板。读取成功后严禁说“已修正/已修改”；若用户要求变更，必须继续调用 \`apply_template_bundle_patch\` 或 \`update_template_bundle\`，且修改工具返回 \`ok=true\` 后才算完成。
+7. 如果某次 \`apply_template_bundle_patch\` 或 \`update_template_bundle\` 返回 \`ok=false\`，后续只调用 \`read_template_bundle_file\` 不能清除失败状态，必须再次调用修改工具并成功。
+8. \`apply_template_bundle_patch\` 必须使用原始 patch 文本，不要包 Markdown 代码围栏。格式为 \`*** Begin Patch\`、\`*** Update File: path\`、\`@@ optional anchor\`、空格上下文行、\`-\` 删除行、\`+\` 新增行、\`*** End Patch\`。patch 要尽量小，只包含必要上下文。patch 可以同时修改 template.typ、data.json、data.schema.json、manifest.json。
+9. data.json 是完整模拟数据，字段必须与 data.schema.json 和 template.typ 一致。
+10. 优先保留用户已有结构，仅修改用户要求的部分。
+11. template.typ 通过 \`#let data = json("data.json")\` 读取数据，请确保代码可编译。
+12. 只要用户要求生成完整领域模板，或请求明显属于内置类型（小票、面单、试卷、商务文档、邀请函），必须按顺序显式调用工具：先 \`list_template_starters\`，再从返回列表中选择 starterId 调用 \`get_starter_context\`；不能直接手写整套 Typst。
+13. 必须基于 \`get_starter_context\` 返回的 starter、componentSource 和 designBrief 排版，优先内联/改造现有组件模式；只有 starter 和组件源码都覆盖不了时，才少量手写 Typst。
+14. 最终 files map 不能包含 lib/ 文件；不要保留本地 \`#import "lib/..."\`。Typst package import 只允许 \`@preview/tiaoma:0.3.0\`，用于条码/二维码；不要使用其他 package import。
+15. files["template.typ"] 必须是原始 Typst 源码，严禁包在 Markdown 代码围栏（如 \`\`\`typst）里。
+16. Typst 模式规则必须严格遵守：顶层 markup 调用写 \`#text(...)\`；\`#let ... = { ... }\`、\`#for ... { ... }\`、函数参数列表是 code mode，里面不要写 \`#text\`；内容块 \`[ ... ]\` 是 markup mode，里面函数调用和变量插值必须写 \`#text(...)\`、\`#data.xxx\`。
+17. 修复 \`the character # is not valid in code\` 时，先检查是否在函数参数、字典、数组、\`#let ... = { ... }\` 或 \`#for ... { ... }\` 内误写了 \`#\`。
+18. \`text(fill: ...)\` 只能接收颜色、渐变或 tiling，不能传 \`none\`。可选颜色参数使用 \`fill: auto\` 表示继承；如果变量可能是 \`none\`，必须先判断再决定是否传入 \`fill\`。
+19. 窄小票的 grid 列宽不要依赖 \`auto\`；商品/汇总/键值行优先使用 \`1fr + 固定物理宽度\`，如 \`columns: (1fr, 18mm)\`。
 Typst 模式速查：
 - 正确：\`#grid(columns: (1fr, 18mm), [品名], align(right)[#str(value)])\`
 - 错误：\`#grid(columns: (1fr, 18mm), [品名], #align(right)[#str(value)])\`
@@ -128,6 +130,7 @@ const TYPST_QUICK_RULES = [
   '窄小票 grid 的右侧金额/键值列使用固定宽度，不要使用 auto。',
   'template.typ 只能是原始 Typst 文件内容，不要返回 Markdown 代码块围栏。',
   '局部修复前先 read_template_bundle_file，再用 apply_template_bundle_patch。patch 可同时改多个文件，不需要每个文件都单独 read。',
+  'read_template_bundle_file 只读不改；读取成功不能说已经修好。修改工具 ok=false 后，必须再次调用修改工具并 ok=true 才能结束。',
   '任何工具返回 ok=false 时，本次修改没有生效；严禁在最终回复里说已修改、已保存或编译通过。',
   '修改后若工具返回编译错误，必须基于失败草稿继续修复。',
   '非修改场景只答疑，不输出代码块。',
@@ -458,19 +461,35 @@ const latestUserText = (messages: GenerateRequest['messages']) => {
 
 const SERVER_TOOL_HISTORY_KEEP_MESSAGES = 12
 const SERVER_MAX_TEXT_PART_CHARS = 1200
+const LEGACY_TEMPLATE_EDIT_TOOL_TYPES = new Set([
+  'tool-edit_template_bundle_file',
+  'tool-edit_template_bundle_file_range',
+  'tool-patch_template_bundle',
+])
+const LEGACY_REVISION_NOTE = '[历史旧版编辑工具状态已归档；当前模板编辑不再使用 revision，请以当前 TemplateBundle 快照为准。]'
+const LEGACY_REVISION_PATTERN = /expectedRevision|currentRevision|workspaceRevision|当前 revision|版本已过期|已经分叉|File has changed since read|File has not been read yet|Call read_template_bundle_file/i
+
+const sanitizeHistoricalTextForModel = (value: string, role?: string) => {
+  if (role === 'user') return value
+  return LEGACY_REVISION_PATTERN.test(value) ? LEGACY_REVISION_NOTE : value
+}
 
 const compactToolPartForModel = (part: Record<string, unknown>) => {
+  const type = typeof part.type === 'string' ? part.type : 'tool'
+  if (LEGACY_TEMPLATE_EDIT_TOOL_TYPES.has(type)) {
+    return { type: 'text', text: LEGACY_REVISION_NOTE }
+  }
   const input = part.input && typeof part.input === 'object' ? part.input as Record<string, unknown> : {}
   const output = part.output && typeof part.output === 'object' ? part.output as Record<string, unknown> : undefined
   const file = typeof input.file === 'string' ? input.file : typeof output?.file === 'string' ? output.file : undefined
   const starterId = typeof input.starterId === 'string' ? input.starterId : undefined
   const fileCount = input.files && typeof input.files === 'object' ? Object.keys(input.files as Record<string, unknown>).length : undefined
   const ok = typeof output?.ok === 'boolean' ? output.ok : undefined
-  const error = typeof output?.error === 'string' ? output.error.slice(0, 600) : undefined
+  const error = typeof output?.error === 'string' ? sanitizeHistoricalTextForModel(output.error).slice(0, 600) : undefined
   const changedFiles = Array.isArray(output?.changedFiles) ? output.changedFiles.filter((item): item is string => typeof item === 'string') : []
 
   return {
-    type: typeof part.type === 'string' ? part.type : 'tool',
+    type,
     ...(typeof part.toolCallId === 'string' ? { toolCallId: part.toolCallId } : {}),
     state: typeof part.state === 'string' ? part.state : undefined,
     input: {
@@ -491,6 +510,7 @@ const compactMessagesForModel = (messages: GenerateRequest['messages'], keepRece
   return messages.map((message, messageIndex) => {
     const parts = Array.isArray((message as any).parts) ? (message as any).parts : []
     const keepToolDetails = messageIndex >= firstToolMessageToKeep
+    const role = typeof (message as any).role === 'string' ? (message as any).role : undefined
     return {
       ...message,
       role: (message as any).role,
@@ -499,8 +519,15 @@ const compactMessagesForModel = (messages: GenerateRequest['messages'], keepRece
           if (!part || typeof part !== 'object') return part
           const record = part as Record<string, unknown>
           const type = typeof record.type === 'string' ? record.type : ''
-          if (type === 'text' && typeof record.text === 'string' && record.text.length > SERVER_MAX_TEXT_PART_CHARS) {
-            return { ...record, text: `${record.text.slice(0, SERVER_MAX_TEXT_PART_CHARS)}\n\n[历史消息已截断]` }
+          if (type === 'text' && typeof record.text === 'string') {
+            const text = sanitizeHistoricalTextForModel(record.text, role)
+            if (text.length > SERVER_MAX_TEXT_PART_CHARS) {
+              return { ...record, text: `${text.slice(0, SERVER_MAX_TEXT_PART_CHARS)}\n\n[历史消息已截断]` }
+            }
+            return text === record.text ? record : { ...record, text }
+          }
+          if (LEGACY_TEMPLATE_EDIT_TOOL_TYPES.has(type)) {
+            return { type: 'text', text: LEGACY_REVISION_NOTE }
           }
           if (type.startsWith('tool-') && !keepToolDetails) {
             return compactToolPartForModel(record)
