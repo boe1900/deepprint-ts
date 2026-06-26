@@ -13,6 +13,7 @@
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "smoke:assets": "node scripts/template-assets-smoke.mjs",
+    "smoke:edit": "tsx scripts/template-edit-smoke.mjs",
     "check": "npm run lint && npm run build",
     "preview": "npm run build && npm run start"
   },

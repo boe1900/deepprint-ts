@@ -2,6 +2,14 @@ export type TemplateBundleFiles = Record<string, string>;
 
 export type RenderFormat = 'png' | 'pdf';
 
+const stripWrappingCodeFence = (source: string) => {
+  const trimmed = source.trim();
+  const match = trimmed.match(/^```(?:typst|typ)?\s*\n([\s\S]*?)\n```\s*$/i);
+  return match?.[1] ?? source;
+};
+
+const normalizeTemplateSource = (source: string) => stripWrappingCodeFence(source).replace(/^\uFEFF/, '');
+
 export const DEFAULT_TEMPLATE_BUNDLE_FILES: TemplateBundleFiles = {
   'manifest.json': JSON.stringify({
     kind: 'template_bundle',
@@ -42,12 +50,20 @@ export const normalizeTemplateBundleFiles = (
   if (files && typeof files === 'object' && !Array.isArray(files)) {
     const entries = Object.entries(files as Record<string, unknown>)
       .filter((entry): entry is [string, string] => typeof entry[1] === 'string');
-    if (entries.length > 0) return Object.fromEntries(entries);
+    if (entries.length > 0) {
+      const normalized = Object.fromEntries(entries);
+      if (typeof normalized['template.typ'] === 'string') {
+        normalized['template.typ'] = normalizeTemplateSource(normalized['template.typ']);
+      }
+      return normalized;
+    }
   }
 
   return {
     ...DEFAULT_TEMPLATE_BUNDLE_FILES,
-    'template.typ': fallbackContent || DEFAULT_TEMPLATE_BUNDLE_FILES['template.typ'],
+    'template.typ': fallbackContent
+      ? normalizeTemplateSource(fallbackContent)
+      : DEFAULT_TEMPLATE_BUNDLE_FILES['template.typ'],
     'data.json': JSON.stringify(fallbackData, null, 2),
   };
 };

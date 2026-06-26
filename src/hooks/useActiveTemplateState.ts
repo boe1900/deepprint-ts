@@ -19,6 +19,7 @@ export function useActiveTemplateState({
   const [bundleFiles, setBundleFiles] = useState<TemplateBundleFiles>(() => toTemplateBundleFiles(undefined, defaultCode, defaultData));
   const [chatSeedMessages, setChatSeedMessages] = useState<ChatSeedMessage[]>([]);
   const [chatSeedVersion, setChatSeedVersion] = useState(0);
+  const [isChatSeedLoading, setIsChatSeedLoading] = useState(false);
   const selectTemplateSeqRef = useRef(0);
   const currentTemplateIdRef = useRef('');
 
@@ -34,6 +35,7 @@ export function useActiveTemplateState({
     setData(defaultData);
     setBundleFiles(toTemplateBundleFiles(undefined, defaultCode, defaultData));
     setChatSeedMessages([]);
+    setIsChatSeedLoading(false);
     setChatSeedVersion((version) => version + 1);
   }, [defaultCode, defaultData]);
 
@@ -42,7 +44,7 @@ export function useActiveTemplateState({
     currentTemplateIdRef.current = id;
     setActiveTemplateId(id);
     setChatSeedMessages([]);
-    setChatSeedVersion((version) => version + 1);
+    setIsChatSeedLoading(true);
 
     try {
       const [detail, thread] = await Promise.all([
@@ -65,6 +67,7 @@ export function useActiveTemplateState({
         role: message.role,
         parts: message.parts || [],
       })));
+      setIsChatSeedLoading(false);
       setChatSeedVersion((version) => version + 1);
     } catch (err) {
       if (selectTemplateSeqRef.current !== seq || currentTemplateIdRef.current !== id) {
@@ -73,6 +76,7 @@ export function useActiveTemplateState({
 
       console.error('加载模版失败:', err);
       setChatSeedMessages([]);
+      setIsChatSeedLoading(false);
       setChatSeedVersion((version) => version + 1);
     }
   }, [defaultCode, defaultData]);
@@ -81,6 +85,7 @@ export function useActiveTemplateState({
     activeTemplateId,
     chatSeedMessages,
     chatSeedVersion,
+    isChatSeedLoading,
     code,
     data,
     bundleFiles,

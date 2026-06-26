@@ -23,11 +23,13 @@ import {
   ZoomOut,
 } from 'lucide-react';
 import TypstPreview, { type TypstPreviewRef } from '@/components/TypstPreview';
+import type { TemplateBundleFiles } from '@/lib/template-bundle';
 
 export type WorkspaceTab = 'preview' | 'code';
 
 interface WorkspacePaneProps {
   activeTab: WorkspaceTab;
+  bundleFiles: TemplateBundleFiles;
   code: string;
   data: Record<string, unknown>;
   hasActiveTemplate: boolean;
@@ -56,6 +58,7 @@ interface WorkspacePaneProps {
 
 export default function WorkspacePane({
   activeTab,
+  bundleFiles,
   code,
   data,
   hasActiveTemplate,
@@ -232,6 +235,7 @@ export default function WorkspacePane({
             {hasActiveTemplate ? (
               <TypstPreview
                 ref={previewRef}
+                bundleFiles={bundleFiles}
                 code={code}
                 data={data}
                 onZoomChange={onPreviewZoomChange}

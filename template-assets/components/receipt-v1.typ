@@ -29,8 +29,11 @@
       item-name: 1fr,
       item-qty: 9mm,
       item-amount: 14mm,
+      label-value: 18mm,
       gutter: 4pt,
       qr-size: 18mm,
+      callout-size: 24pt,
+      bottom-spacer: 25pt,
     )
   } else {
     (
@@ -42,8 +45,11 @@
       item-name: 1fr,
       item-qty: 12mm,
       item-amount: 18mm,
+      label-value: 24mm,
       gutter: 6pt,
       qr-size: 21mm,
+      callout-size: 28pt,
+      bottom-spacer: 35pt,
     )
   }
 }
@@ -61,16 +67,36 @@
 
 // safe-text
 // Purpose: render one clipped text fragment.
-// Inputs: body, optional size/weight.
+// Inputs: body, optional size/weight/fill.
 // Use when: product names, labels, footer lines, and optional notes can be long.
-#let safe-text(body, size: auto, weight: 400) = {
+// Rules: fill:auto inherits the current text color; never pass fill:none to text.
+#let safe-text(body, size: auto, weight: 400, fill: auto) = {
   let content = str(body)
-  if size == auto {
-    block(clip: true)[#text(weight: weight, top-edge: "bounds", bottom-edge: "bounds")[#content]]
-  } else {
-    block(clip: true)[#text(size: size, weight: weight, top-edge: "bounds", bottom-edge: "bounds")[#content]]
+  let args = (
+    weight: weight,
+    top-edge: "bounds",
+    bottom-edge: "bounds",
+  )
+  if size != auto {
+    args.insert("size", size)
   }
+  if fill != auto and fill != none {
+    args.insert("fill", fill)
+  }
+  block(clip: true)[
+    #text(..args)[#content]
+  ]
 }
+
+// muted-text
+// Purpose: small secondary receipt text without exposing raw fill:none risk.
+// Inputs: body, optional size/weight.
+#let muted-text(body, size: 7pt, weight: 400) = safe-text(
+  body,
+  size: size,
+  weight: weight,
+  fill: rgb("6B7280"),
+)
 
 // divider
 // Purpose: consistent receipt divider.
@@ -116,8 +142,9 @@
 // Purpose: two-column receipt metadata row.
 // Inputs: left, value, preset.
 // Use when: table number, cashier, payment method, discounts, or totals.
+// Rules: right value column is fixed width; do not use auto for thermal receipt grids.
 #let label-value-row(left, value, preset, weight: 400) = grid(
-  columns: (1fr, auto),
+  columns: (1fr, preset.label-value),
   gutter: preset.gutter,
   safe-text(left, weight: weight),
   align(right)[#text(weight: weight)[#str(value)]],
@@ -137,15 +164,34 @@
   }
 }
 
+// receipt-callout
+// Purpose: large centered visual callout.
+// Inputs: callout with value and optional label, preset.
+// Use when: pickup code, queue number, table number, or any primary identifier.
+// Avoid: ordinary metadata rows.
+// Rules: keep it independent, centered, and much larger than body text.
+#let receipt-callout(callout, preset) = {
+  if callout != none and "value" in callout and str(callout.value) != "" {
+    align(center)[
+      #text(size: 7pt, fill: rgb("6B7280"), weight: 700)[#get(callout, "label", default: "取餐号")]
+      #linebreak()
+      #v(1mm)
+      #text(size: preset.callout-size, weight: 900, top-edge: "bounds", bottom-edge: "bounds")[#str(callout.value)]
+    ]
+    section-gap(preset, dashed: true)
+  }
+}
+
 // receipt-item-row
 // Purpose: one product line.
 // Inputs: name, qty, amount, preset.
 // Use when: rendering the main item list.
 // Avoid: multi-line notes; put notes in footer.
-// Rules: keep qty and amount right aligned.
+// Rules: keep qty and amount right aligned and top aligned.
 #let receipt-item-row(name, qty, amount, preset) = grid(
   columns: (preset.item-name, preset.item-qty, preset.item-amount),
   gutter: preset.gutter,
+  align: (left + top, right + top, right + top),
   safe-text(name),
   align(right)[#str(qty)],
   align(right)[#str(amount)],
@@ -247,11 +293,12 @@
 // Purpose: complete receipt composition.
 // Inputs: data, optional width.
 // Use when: generating a complete receipt template.
-// Rules: keep data fields business-level: store, order, items, totals, payments, badges, qr, footer.
+// Rules: keep data fields business-level: store, order, callout, items, totals, payments, badges, qr, footer.
 #let receipt-document(data, width: 58mm) = {
   let preset = receipt-preset(width: width)
   safe-page(preset)[
     #receipt-header(data.store, data.order, preset)
+    #receipt-callout(get(data, "callout", default: none), preset)
     #receipt-meta(get(data.order, "metadata", default: ()), preset)
     #receipt-items(get(data, "items", default: ()), preset)
     #receipt-summary(get(data, "totals", default: ()), preset)
@@ -259,5 +306,6 @@
     #receipt-badges(get(data, "badges", default: ()), preset)
     #receipt-qr(get(data, "qr", default: none), preset)
     #receipt-footer(get(data, "footer", default: ()), preset)
+    #v(preset.bottom-spacer)
   ]
 }

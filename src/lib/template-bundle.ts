@@ -38,6 +38,14 @@ export const DEFAULT_TEMPLATE_BUNDLE_FILES: TemplateBundleFiles = {
   }, null, 2),
 };
 
+const stripWrappingCodeFence = (source: string) => {
+  const trimmed = source.trim();
+  const match = trimmed.match(/^```(?:typst|typ)?\s*\n([\s\S]*?)\n```\s*$/i);
+  return match?.[1] ?? source;
+};
+
+const normalizeTemplateSource = (source: string) => stripWrappingCodeFence(source).replace(/^\uFEFF/, '');
+
 export const toTemplateBundleFiles = (
   files: unknown,
   fallbackContent = '',
@@ -48,17 +56,33 @@ export const toTemplateBundleFiles = (
       .filter((entry): entry is [string, string] => (
         typeof entry[0] === 'string' && typeof entry[1] === 'string'
       ));
-    if (entries.length > 0) return Object.fromEntries(entries);
+    if (entries.length > 0) {
+      const normalized = Object.fromEntries(entries);
+      if (typeof normalized['template.typ'] === 'string') {
+        normalized['template.typ'] = normalizeTemplateSource(normalized['template.typ']);
+      }
+      return normalized;
+    }
   }
 
   return {
     ...DEFAULT_TEMPLATE_BUNDLE_FILES,
     'template.typ': fallbackContent
-      ? ensureDataBinding(fallbackContent)
+      ? ensureDataBinding(normalizeTemplateSource(fallbackContent))
       : DEFAULT_TEMPLATE_BUNDLE_FILES['template.typ'],
     'data.json': JSON.stringify(fallbackData, null, 2),
   };
 };
+
+export const mergeTemplateBundleState = (
+  files: unknown,
+  content: string,
+  data: Record<string, unknown>,
+): TemplateBundleFiles => ({
+  ...toTemplateBundleFiles(files, content, data),
+  'template.typ': normalizeTemplateSource(content),
+  'data.json': JSON.stringify(data, null, 2),
+});
 
 export const getBundleData = (files: TemplateBundleFiles): Record<string, unknown> => {
   try {

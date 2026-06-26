@@ -25,7 +25,8 @@ import {
   type LocalAIConfig,
 } from '@/lib/local-ai-config';
 import { downloadZip } from '@/lib/download-zip';
-import { getBundleData, getBundleTemplate, toTemplateBundleFiles, type TemplateBundleFiles } from '@/lib/template-bundle';
+import { getBundleTemplate, mergeTemplateBundleState, toTemplateBundleFiles, type TemplateBundleFiles } from '@/lib/template-bundle';
+import { bytesFromBase64, compileTemplateBundleForFeedback } from '@/lib/typst-compile';
 
 // Auth
 import { authClient } from '@/lib/auth-client';
@@ -157,6 +158,18 @@ const DEFAULT_DATA = {
   ]
 };
 
+const parseTemplateDataJson = (raw: string): { ok: true; data: Record<string, unknown> } | { ok: false; error: string } => {
+  try {
+    const parsed = JSON.parse(raw || '{}');
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return { ok: false, error: 'data.json 必须是 JSON object' };
+    }
+    return { ok: true, data: parsed as Record<string, unknown> };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? `data.json 解析失败：${err.message}` : 'data.json 解析失败' };
+  }
+};
+
 export default function DeepPrintStudio() {
   // UI 状态
   const [showChat, setShowChat] = useState(true);
@@ -180,6 +193,7 @@ export default function DeepPrintStudio() {
     activeTemplateId,
     chatSeedMessages,
     chatSeedVersion,
+    isChatSeedLoading,
     bundleFiles,
     code,
     data,
@@ -268,14 +282,14 @@ export default function DeepPrintStudio() {
   // 保存当前模版
   const handleSave = useCallback(async () => {
     if (!activeTemplateId) return;
-    const files = toTemplateBundleFiles(bundleFiles, code, data);
+    const files = mergeTemplateBundleState(bundleFiles, code, data);
     setIsSaving(true);
     try {
       await api.updateTemplate(activeTemplateId, {
         content: code,
         mock_data: data,
-        files_json: files,
-        update_source: 'manual',
+          files_json: files,
+          update_source: 'manual',
         update_summary: '手动保存',
       });
       setBundleFiles(files);
@@ -318,11 +332,16 @@ export default function DeepPrintStudio() {
   }, []);
 
   const handleExportPdf = useCallback(async () => {
-    if (!previewRef.current) return;
+    if (!activeTemplateId) return;
     setIsExportingPdf(true);
     try {
-      const pdfBytes = await previewRef.current.exportPdf();
-      if (!pdfBytes || pdfBytes.length === 0) {
+      const files = mergeTemplateBundleState(bundleFiles, code, data);
+      const result = await api.compileTemplateBundle(files, {
+        format: 'pdf',
+        include_artifact_base64: true,
+      });
+      const pdfBytes = result.artifact_base64 ? bytesFromBase64(result.artifact_base64) : null;
+      if (!pdfBytes?.length) {
         alert('导出失败，请检查模板是否有编译错误');
         return;
       }
@@ -344,23 +363,23 @@ export default function DeepPrintStudio() {
     } finally {
       setIsExportingPdf(false);
     }
-  }, [activeTemplateId, folders, sanitizeFilename]);
+  }, [activeTemplateId, bundleFiles, code, data, folders, sanitizeFilename]);
 
   const handleExportBundle = useCallback(() => {
     if (!activeTemplateId) return;
     const activeTemplate = folders.flatMap(f => f.templates).find(t => t.id === activeTemplateId);
     const baseName = sanitizeFilename(activeTemplate?.name || 'template-bundle');
-    downloadZip(`${baseName}.template-bundle.zip`, toTemplateBundleFiles(bundleFiles, code, data));
+    downloadZip(`${baseName}.template-bundle.zip`, mergeTemplateBundleState(bundleFiles, code, data));
   }, [activeTemplateId, bundleFiles, code, data, folders, sanitizeFilename]);
 
   const handleCodeChange = useCallback((nextCode: string) => {
     setCode(nextCode);
-    setBundleFiles(toTemplateBundleFiles(bundleFiles, nextCode, data));
+    setBundleFiles(mergeTemplateBundleState(bundleFiles, nextCode, data));
   }, [bundleFiles, data, setBundleFiles, setCode]);
 
   const handleDataSave = useCallback((nextData: Record<string, unknown>) => {
     setData(nextData);
-    setBundleFiles(toTemplateBundleFiles(bundleFiles, code, nextData));
+    setBundleFiles(mergeTemplateBundleState(bundleFiles, code, nextData));
   }, [bundleFiles, code, setBundleFiles, setData]);
 
   // 主题
@@ -371,38 +390,50 @@ export default function DeepPrintStudio() {
   // AI 工具回调：应用代码并立即编译，返回给模型用于自动修复循环
   const handleApplyAndValidateFromAi = useCallback(async (files: TemplateBundleFiles) => {
     const steps = [];
-    const nextCode = getBundleTemplate(files);
-    const nextData = getBundleData(files);
-    const mergedData = Object.keys(nextData).length > 0 ? nextData : data;
-    if (!previewRef.current) {
-      steps.push({ label: '渲染校验', detail: '预览引擎未就绪', state: 'error' as const });
+    const inputFiles = toTemplateBundleFiles(files, getBundleTemplate(files), data);
+    const nextCode = getBundleTemplate(inputFiles);
+    const parsedData = parseTemplateDataJson(inputFiles['data.json'] || '{}');
+    if (!parsedData.ok) {
+      steps.push({ label: '模拟数据校验', detail: 'data.json 解析失败，等待 AI 修复', state: 'error' as const, error: parsedData.error });
       return {
         ok: false,
-        error: '预览引擎未就绪',
+        error: parsedData.error,
         steps,
       };
     }
-    const compileResult = await previewRef.current.compileAndGetError(nextCode, mergedData, true);
+    const nextData = parsedData.data;
+    const mergedData = Object.keys(nextData).length > 0 ? nextData : data;
+    const normalizedFiles = {
+      ...inputFiles,
+      'template.typ': nextCode,
+      'data.json': JSON.stringify(mergedData, null, 2),
+    };
+
+    setCode(nextCode);
+    setData(mergedData);
+    setBundleFiles(normalizedFiles);
+    steps.push({ label: '应用草稿', detail: '模板和测试数据已应用到当前工作区，正在编译校验', state: 'done' as const });
+
+    const compileResult = await compileTemplateBundleForFeedback(normalizedFiles, nextCode, {
+      format: 'png',
+      includeArtifactBase64: false,
+    });
     if (!compileResult.ok) {
       steps.push({ label: '渲染校验', detail: '编译失败，等待 AI 修复', state: 'error' as const, error: compileResult.error });
       return {
         ...compileResult,
+        files: normalizedFiles,
         steps,
       };
     }
     steps.push({ label: '渲染校验', detail: '编译通过，预览已更新', state: 'done' as const });
-
-    setCode(nextCode);
-    setData(mergedData);
-    setBundleFiles(files);
-    steps.push({ label: '应用结果', detail: '模板和测试数据已应用到当前工作区', state: 'done' as const });
 
     if (compileResult.ok && activeTemplateId) {
       try {
         await api.updateTemplate(activeTemplateId, {
           content: nextCode,
           mock_data: mergedData,
-          files_json: files,
+          files_json: normalizedFiles,
           update_source: 'ai',
           update_summary: 'AI 应用模板修改',
         });
@@ -412,7 +443,7 @@ export default function DeepPrintStudio() {
           setCode(code);
           setData(data);
           setBundleFiles(bundleFiles);
-          void previewRef.current.compileAndGetError(code, data, true);
+          void previewRef.current?.compileAndGetError(code, data, true);
         }
         steps.push({ label: '保存结果', detail: '持久化失败', state: 'error' as const });
         return {
@@ -424,6 +455,7 @@ export default function DeepPrintStudio() {
     }
     return {
       ...compileResult,
+      files: normalizedFiles,
       steps,
     };
   }, [activeTemplateId, bundleFiles, code, data, setBundleFiles, setCode, setData]);
@@ -455,6 +487,7 @@ export default function DeepPrintStudio() {
 
       <WorkspacePane
         activeTab={activeTab}
+        bundleFiles={bundleFiles}
         code={code}
         data={data}
         hasActiveTemplate={hasActiveTemplate}
@@ -483,18 +516,21 @@ export default function DeepPrintStudio() {
 
       {/* ─── 右侧栏：AI 对话 ─── */}
       <div className={showChat ? '' : 'hidden'}>
-        <ChatPanel
-          key={`${activeTemplateId || 'no-template'}:${chatSeedVersion}`}
-          activeTemplateId={activeTemplateId}
-          currentCode={code}
-          currentData={data}
-          initialMessages={chatSeedMessages}
-          localAiConfig={localAiConfig}
-          onPersistMessages={handlePersistAiMessages}
-          onApplyAndValidate={handleApplyAndValidateFromAi}
-          onClose={() => setShowChat(false)}
-          onOpenSettings={() => setShowAiSettingsDialog(true)}
-        />
+        {!isChatSeedLoading && (
+          <ChatPanel
+            key={`${activeTemplateId || 'no-template'}:${chatSeedVersion}`}
+            activeTemplateId={activeTemplateId}
+            currentBundleFiles={bundleFiles}
+            currentCode={code}
+            currentData={data}
+            initialMessages={chatSeedMessages}
+            localAiConfig={localAiConfig}
+            onPersistMessages={handlePersistAiMessages}
+            onApplyAndValidate={handleApplyAndValidateFromAi}
+            onClose={() => setShowChat(false)}
+            onOpenSettings={() => setShowAiSettingsDialog(true)}
+          />
+        )}
       </div>
 
       {/* 模拟数据弹窗 */}

@@ -61,7 +61,7 @@ export function useTemplateVersions({
       setBundleFiles(files);
 
       if (previewRef.current) {
-        await previewRef.current.compileAndGetError(nextCode, nextData, true);
+        await previewRef.current.compileAndGetError(nextCode, nextData, true, files);
       }
 
       await loadVersions();

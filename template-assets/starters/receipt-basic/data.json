@@ -8,14 +8,14 @@
     "time": "2026-06-26 12:30",
     "metadata": [
       {
-        "label": "取餐号",
-        "value": "A109"
-      },
-      {
         "label": "用餐方式",
         "value": "堂食"
       }
     ]
+  },
+  "callout": {
+    "label": "取餐号 / PICKUP",
+    "value": "A109"
   },
   "items": [
     {

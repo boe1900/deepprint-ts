@@ -2,8 +2,8 @@ import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useSta
 import { AlertCircle, Eye, Loader2 } from 'lucide-react';
 import { api } from '@/lib/api-client';
 import { briefErrorText } from '@/lib/brief-error-text';
-import { toTemplateBundleFiles } from '@/lib/template-bundle';
-import type { ToolExecutionStep } from '@/components/assistant-ui/tool-execution-card';
+import { bytesFromBase64, compileTemplateBundleForFeedback, type CompileFeedback } from '@/lib/typst-compile';
+import { getBundleTemplate, mergeTemplateBundleState, type TemplateBundleFiles } from '@/lib/template-bundle';
 
 export interface TypstPreviewRef {
   zoom: number;
@@ -16,51 +16,19 @@ export interface TypstPreviewRef {
     nextCode?: string,
     nextData?: Record<string, unknown>,
     suppressUiError?: boolean,
+    nextFiles?: TemplateBundleFiles,
   ) => Promise<CompileFeedback>;
 }
 
-export type CompileFeedbackStep = ToolExecutionStep;
-
-export type CompileFeedback = {
-  ok: boolean;
-  error?: string;
-  steps?: CompileFeedbackStep[];
-  diagnostics?: {
-    message: string;
-    line?: number;
-    column?: number;
-    snippet?: string;
-  };
-};
-
 interface TypstPreviewProps {
+  bundleFiles: TemplateBundleFiles;
   code: string;
   data: Record<string, unknown>;
   onZoomChange?: (zoom: number) => void;
 }
 
-const bytesFromBase64 = (base64: string) => {
-  const binary = atob(base64);
-  const bytes = new Uint8Array(binary.length);
-  for (let index = 0; index < binary.length; index += 1) {
-    bytes[index] = binary.charCodeAt(index);
-  }
-  return bytes;
-};
-
-const extractDiagnostics = (message: string, source: string): CompileFeedback['diagnostics'] => {
-  const lineMatch = message.match(/line\s+(\d+)(?:[:\s,]+column\s+(\d+))?/i);
-  const line = lineMatch?.[1] ? Number(lineMatch[1]) : undefined;
-  const column = lineMatch?.[2] ? Number(lineMatch[2]) : undefined;
-  return {
-    message,
-    line,
-    column,
-    snippet: line ? source.split('\n')[line - 1]?.trim() : undefined,
-  };
-};
-
 const TypstPreview = forwardRef<TypstPreviewRef, TypstPreviewProps>(({
+  bundleFiles,
   code,
   data,
   onZoomChange,
@@ -88,37 +56,32 @@ const TypstPreview = forwardRef<TypstPreviewRef, TypstPreviewProps>(({
     nextCode?: string,
     nextData?: Record<string, unknown>,
     suppressUiError = false,
+    nextFiles?: TemplateBundleFiles,
   ): Promise<CompileFeedback> => {
-    const sourceCode = nextCode ?? code;
-    const files = toTemplateBundleFiles(undefined, sourceCode, nextData ?? data);
+    const files = nextFiles ?? mergeTemplateBundleState(bundleFiles, nextCode ?? code, nextData ?? data);
+    const sourceCode = getBundleTemplate(files);
 
-    try {
-      setLoading(true);
-      const result = await api.compileTemplateBundle(files, {
-        format: 'png',
-        include_artifact_base64: true,
-      });
-      if (result.artifact_base64) {
-        setArtifactUrl(`data:${result.artifact_mime_type};base64,${result.artifact_base64}`);
+    setLoading(true);
+    const result = await compileTemplateBundleForFeedback(files, sourceCode, {
+      format: 'png',
+      includeArtifactBase64: true,
+    });
+    if (result.ok) {
+      if (result.artifactBase64) {
+        setArtifactUrl(`data:${result.artifactMimeType};base64,${result.artifactBase64}`);
       }
       setError(null);
-      return { ok: true };
-    } catch (err) {
-      const errorMsg = err instanceof Error ? err.message : '编译失败';
-      if (!suppressUiError) setError(errorMsg);
-      return {
-        ok: false,
-        error: errorMsg,
-        diagnostics: extractDiagnostics(errorMsg, sourceCode),
-      };
-    } finally {
-      setLoading(false);
+    } else if (!suppressUiError && result.error) {
+      setError(result.error);
     }
-  }, [code, data]);
+
+    setLoading(false);
+    return result;
+  }, [bundleFiles, code, data]);
 
   const exportPdf = useCallback(async (): Promise<Uint8Array | null> => {
     try {
-      const files = toTemplateBundleFiles(undefined, code, data);
+      const files = mergeTemplateBundleState(bundleFiles, code, data);
       const result = await api.compileTemplateBundle(files, {
         format: 'pdf',
         include_artifact_base64: true,
@@ -128,7 +91,7 @@ const TypstPreview = forwardRef<TypstPreviewRef, TypstPreviewProps>(({
       setError(err instanceof Error ? err.message : '导出失败');
       return null;
     }
-  }, [code, data]);
+  }, [bundleFiles, code, data]);
 
   useImperativeHandle(ref, () => ({
     zoom,
@@ -161,16 +124,6 @@ const TypstPreview = forwardRef<TypstPreviewRef, TypstPreviewProps>(({
           backgroundSize: '20px 20px',
         }}
       >
-        {error && (
-          <div
-            className="fixed top-16 right-4 max-w-[680px] bg-red-100 text-red-600 p-3 rounded-lg shadow-lg text-xs flex items-center gap-2 z-50 border border-red-200"
-            title={error}
-          >
-            <AlertCircle size={14} />
-            <span className="line-clamp-2">{briefErrorText(error, 260)}</span>
-          </div>
-        )}
-
         {loading && !artifactUrl && (
           <div className="flex items-center justify-center h-full text-gray-500 dark:text-gray-400">
             <Loader2 className="animate-spin mr-2" size={20} />
@@ -179,7 +132,7 @@ const TypstPreview = forwardRef<TypstPreviewRef, TypstPreviewProps>(({
         )}
 
         {artifactUrl && (
-          <div className="flex justify-center">
+          <div className="flex flex-col items-center gap-4">
             <div
               ref={documentRef}
               className="bg-white"
@@ -197,6 +150,25 @@ const TypstPreview = forwardRef<TypstPreviewRef, TypstPreviewProps>(({
               }}
             >
               <img src={artifactUrl} alt="Typst preview" className="block max-w-none" />
+            </div>
+          </div>
+        )}
+
+        {!artifactUrl && error && !loading && (
+          <div className="flex min-h-full items-center justify-center text-slate-500 dark:text-slate-300">
+            <div
+              className="mx-auto max-w-[680px] rounded-lg border border-red-200 bg-white/95 p-4 text-sm shadow-sm dark:border-red-900/50 dark:bg-slate-950/80"
+              title={error}
+            >
+              <div className="flex items-start gap-3 text-red-700 dark:text-red-200">
+                <AlertCircle size={18} className="mt-0.5 shrink-0" />
+                <div>
+                  <p className="font-semibold">编译失败</p>
+                  <p className="mt-1 text-xs leading-5 text-red-600 dark:text-red-200">
+                    {briefErrorText(error, 520)}
+                  </p>
+                </div>
+              </div>
             </div>
           </div>
         )}

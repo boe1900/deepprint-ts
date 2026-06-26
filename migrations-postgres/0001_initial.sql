@@ -99,11 +99,18 @@ CREATE TABLE IF NOT EXISTS ai_messages (
   thread_id text NOT NULL REFERENCES ai_threads(id) ON DELETE CASCADE,
   role text NOT NULL,
   parts_json text NOT NULL,
+  position integer NOT NULL DEFAULT 0,
   created_at bigint NOT NULL DEFAULT extract(epoch FROM now())::bigint
 );
 
+ALTER TABLE ai_messages
+  ADD COLUMN IF NOT EXISTS position integer NOT NULL DEFAULT 0;
+
 CREATE INDEX IF NOT EXISTS idx_ai_messages_thread_created
   ON ai_messages(thread_id, created_at);
+
+CREATE INDEX IF NOT EXISTS idx_ai_messages_thread_position
+  ON ai_messages(thread_id, position);
 
 CREATE TABLE IF NOT EXISTS trial_generation_events (
   id text PRIMARY KEY,

@@ -118,3 +118,8 @@ export const getStarterContext = (starterId: string): TemplateStarterContext => 
     designBrief: readAsset(`starters/${starterId}/design.md`),
   }
 }
+
+export const getDesignBriefForDocumentType = (documentType: string) => {
+  const meta = TEMPLATE_ASSET_META.find((item) => item.documentType === documentType)
+  return meta ? readAsset(`starters/${meta.starterId}/design.md`) : ''
+}

@@ -8,7 +8,7 @@ import { resolveModelFromConfig, resolveModelFromEnv } from '../lib/ai-provider'
 import { evaluateTrialGenerationLimit, recordSuccessfulGeneration } from '../lib/trial-generation-limit'
 import { compileTemplateBundle, validateTemplateBundle } from '../lib/render-client'
 import { normalizeTemplateBundleFiles, type RenderFormat, type TemplateBundleFiles } from '../lib/template-bundle'
-import { getStarterContext, listTemplateStarters } from '../lib/template-assets'
+import { getDesignBriefForDocumentType, getStarterContext, listTemplateStarters } from '../lib/template-assets'
 import type { AppDatabase } from '../lib/db-types'
 
 export type Bindings = {
@@ -76,18 +76,36 @@ app.on(['GET', 'POST'], '/auth/*', (c) => {
 const TYPST_SYSTEM_PROMPT = `你是 DeepPrint 的 Typst 模版编辑 Agent。
 
 工作方式：
-1. 只有在用户明确要求“修改/生成/应用模版”时，才调用工具 \`update_template_bundle\`。
+1. 只有在用户明确要求“修改/生成/应用模版”时，才调用修改工具。
 2. 当不需要修改时，只进行自然中文对话，不能调用工具。
-3. 每次修改都提交完整 TemplateBundle files map，至少包含 manifest.json、template.typ、data.json、data.schema.json。
-4. 工具结果会返回编译结果：
+3. 首次生成、切换模板类型、或大范围重构时，调用 \`update_template_bundle\` 提交完整 TemplateBundle files map，至少包含 manifest.json、template.typ、data.json、data.schema.json。
+4. 修复编译错误、调整局部样式、或只改少量文本/几行代码时，按代码代理风格处理：先用 \`read_template_bundle_file\` 读取当前文件相关行，再调用 \`apply_template_bundle_patch\` 做局部修改。不要为一个小错误重写整个 template.typ。
+5. 工具结果会返回编译结果：
    - \`ok=true\`：编译成功，可以给出简短说明并结束。
-   - \`ok=false\`：必须根据 \`error\` 继续修复并再次调用 \`update_template_bundle\`。
-5. data.json 是完整模拟数据，字段必须与 data.schema.json 和 template.typ 一致。
-6. 优先保留用户已有结构，仅修改用户要求的部分。
-7. template.typ 通过 \`#let data = json("data.json")\` 读取数据，请确保代码可编译。
-8. 只要用户要求生成完整领域模板，或请求明显属于内置类型（小票、面单、试卷、商务文档、邀请函），必须按顺序显式调用工具：先 \`list_template_starters\`，再从返回列表中选择 starterId 调用 \`get_starter_context\`；不能直接手写整套 Typst。
-9. 必须基于 \`get_starter_context\` 返回的 starter、componentSource 和 designBrief 排版，优先内联/改造现有组件模式；只有 starter 和组件源码都覆盖不了时，才少量手写 Typst。
-10. 最终 files map 不能包含 lib/ 文件；不要保留本地 \`#import "lib/..."\`。Typst package import 只允许 \`@preview/tiaoma:0.3.0\`，用于条码/二维码；不要使用其他 package import。
+   - \`ok=false\`：本次修改没有生效，严禁说“已修改/已编译通过/已完成”。必须根据 \`error\` 继续修复；若是局部错误，优先重新读取当前文件后再次调用 \`apply_template_bundle_patch\`。
+6. \`apply_template_bundle_patch\` 必须使用原始 patch 文本，不要包 Markdown 代码围栏。格式为 \`*** Begin Patch\`、\`*** Update File: path\`、\`@@ optional anchor\`、空格上下文行、\`-\` 删除行、\`+\` 新增行、\`*** End Patch\`。patch 要尽量小，只包含必要上下文。patch 可以同时修改 template.typ、data.json、data.schema.json、manifest.json。
+7. data.json 是完整模拟数据，字段必须与 data.schema.json 和 template.typ 一致。
+8. 优先保留用户已有结构，仅修改用户要求的部分。
+9. template.typ 通过 \`#let data = json("data.json")\` 读取数据，请确保代码可编译。
+10. 只要用户要求生成完整领域模板，或请求明显属于内置类型（小票、面单、试卷、商务文档、邀请函），必须按顺序显式调用工具：先 \`list_template_starters\`，再从返回列表中选择 starterId 调用 \`get_starter_context\`；不能直接手写整套 Typst。
+11. 必须基于 \`get_starter_context\` 返回的 starter、componentSource 和 designBrief 排版，优先内联/改造现有组件模式；只有 starter 和组件源码都覆盖不了时，才少量手写 Typst。
+12. 最终 files map 不能包含 lib/ 文件；不要保留本地 \`#import "lib/..."\`。Typst package import 只允许 \`@preview/tiaoma:0.3.0\`，用于条码/二维码；不要使用其他 package import。
+13. files["template.typ"] 必须是原始 Typst 源码，严禁包在 Markdown 代码围栏（如 \`\`\`typst）里。
+14. Typst 模式规则必须严格遵守：顶层 markup 调用写 \`#text(...)\`；\`#let ... = { ... }\`、\`#for ... { ... }\`、函数参数列表是 code mode，里面不要写 \`#text\`；内容块 \`[ ... ]\` 是 markup mode，里面函数调用和变量插值必须写 \`#text(...)\`、\`#data.xxx\`。
+15. 修复 \`the character # is not valid in code\` 时，先检查是否在函数参数、字典、数组、\`#let ... = { ... }\` 或 \`#for ... { ... }\` 内误写了 \`#\`。
+16. \`text(fill: ...)\` 只能接收颜色、渐变或 tiling，不能传 \`none\`。可选颜色参数使用 \`fill: auto\` 表示继承；如果变量可能是 \`none\`，必须先判断再决定是否传入 \`fill\`。
+17. 窄小票的 grid 列宽不要依赖 \`auto\`；商品/汇总/键值行优先使用 \`1fr + 固定物理宽度\`，如 \`columns: (1fr, 18mm)\`。
+Typst 模式速查：
+- 正确：\`#grid(columns: (1fr, 18mm), [品名], align(right)[#str(value)])\`
+- 错误：\`#grid(columns: (1fr, 18mm), [品名], #align(right)[#str(value)])\`
+- 正确：\`#let helper(value) = align(right)[#str(value)]\`
+- 错误：\`#let helper(value) = align(right)[str(value)]\`
+- 正确：\`#align(center)[#text(size: 15pt)[#store.name]]\`
+- 错误：\`#align(center)[text(size: 15pt)[store.name]]\`
+- 正确：\`#let safe-text(body, fill: auto) = if fill == auto { text[#body] } else { text(fill: fill)[#body] }\`
+- 错误：\`#let safe-text(body, fill: none) = text(fill: fill)[#body]\`
+- 正确：\`#grid(columns: (1fr, 18mm), [合计], align(right)[#total])\`
+- 避免：\`#grid(columns: (1fr, auto), [合计], align(right)[#total])\`
 
 输出风格：
 - 纯咨询时，直接回答问题，不输出代码块。
@@ -103,7 +121,15 @@ const TYPST_QUICK_RULES = [
   '二维码需要保留白底与静区；条码/二维码只允许使用 @preview/tiaoma:0.3.0，优先复用 starter/componentSource 里已有写法。',
   '在网格/表格布局中，列数和内容数量保持一致。',
   '字符串插值和引号必须成对闭合。',
-  '修改后若工具返回编译错误，必须基于错误继续修复。',
+  'Typst code mode 里不要写 #；Typst 内容块 [...] 里调用函数或插入变量必须写 #。',
+  '函数参数中传内容块时，写 align(right)[#str(value)]，不要写 #align(right)[...]。',
+  '内容块 [...] 里不要裸写 text(...), str(...), data.xxx；必须写 #text(...), #str(...), #data.xxx。',
+  '不要把 none 传给 text(fill: ...)。可选颜色用 fill:auto 或先判断 fill != none。',
+  '窄小票 grid 的右侧金额/键值列使用固定宽度，不要使用 auto。',
+  'template.typ 只能是原始 Typst 文件内容，不要返回 Markdown 代码块围栏。',
+  '局部修复前先 read_template_bundle_file，再用 apply_template_bundle_patch。patch 可同时改多个文件，不需要每个文件都单独 read。',
+  '任何工具返回 ok=false 时，本次修改没有生效；严禁在最终回复里说已修改、已保存或编译通过。',
+  '修改后若工具返回编译错误，必须基于失败草稿继续修复。',
   '非修改场景只答疑，不输出代码块。',
 ];
 
@@ -153,6 +179,7 @@ type RequestScopedAIConfig = {
 
 type GenerateRequest = {
   messages: Array<Omit<any, 'id'>>
+  trigger?: string
   // AssistantChatTransport forwards the browser-registered toolkit schemas.
   // Keep tool definitions in the UI because these tools mutate editor state.
   tools?: Record<string, any>
@@ -161,6 +188,7 @@ type GenerateRequest = {
     template_id?: string
     base_typst?: string
     base_data?: Record<string, unknown>
+    bundle_files?: TemplateBundleFiles
   }
 }
 
@@ -328,10 +356,27 @@ const trimMiddle = (input: string, keepHead: number, keepTail: number) => {
   return `${input.slice(0, keepHead)}\n\n...（中间内容已省略）...\n\n${input.slice(-keepTail)}`
 }
 
+const hashText = (content: string) => {
+  let hash = 2166136261
+  for (let index = 0; index < content.length; index += 1) {
+    hash ^= content.charCodeAt(index)
+    hash = Math.imul(hash, 16777619)
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0')
+}
+
 const buildTemplateContextSection = (context?: GenerateRequest['context']) => {
   const rawTypst = typeof context?.base_typst === 'string' ? context.base_typst : ''
   const rawData = context?.base_data ?? {}
+  const bundleFiles = context?.bundle_files && typeof context.bundle_files === 'object' && !Array.isArray(context.bundle_files)
+    ? normalizeTemplateBundleFiles(context.bundle_files)
+    : undefined
   const dataText = JSON.stringify(rawData, null, 2)
+  const fileSummary = bundleFiles
+    ? Object.entries(bundleFiles)
+      .map(([file, content]) => `- ${file}: length=${content.length}, lines=${content.split('\n').length}, hash=${hashText(content)}`)
+      .join('\n')
+    : '- template.typ\n- data.json'
 
   const typstFull = rawTypst.length > 0 && rawTypst.length <= MAX_FULL_TYPST_CHARS
   const dataFull = dataText.length <= MAX_FULL_DATA_CHARS
@@ -350,6 +395,9 @@ const buildTemplateContextSection = (context?: GenerateRequest['context']) => {
 - typst_context_mode=${typstFull ? 'full' : 'truncated'}
 - data_context_mode=${dataFull ? 'full' : 'truncated'}
 
+当前 TemplateBundle 文件快照：
+${fileSummary}
+
 当前 Typst 模板代码：
 \`\`\`typst
 ${typstContent}
@@ -359,6 +407,38 @@ ${typstContent}
 \`\`\`json
 ${dataContent}
 \`\`\``
+}
+
+const getBundleManifest = (context?: GenerateRequest['context']): Record<string, unknown> => {
+  const rawManifest = context?.bundle_files?.['manifest.json']
+  if (typeof rawManifest !== 'string') return {}
+  try {
+    const parsed = JSON.parse(rawManifest)
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {}
+  } catch {
+    return {}
+  }
+}
+
+const inferDocumentTypeFromContext = (context: GenerateRequest['context'] | undefined, messages: GenerateRequest['messages']) => {
+  const manifest = getBundleManifest(context)
+  const manifestType = typeof manifest.document_type === 'string' ? manifest.document_type : ''
+  if (manifestType) return manifestType
+
+  const starterId = inferStarterId(`${latestUserText(messages)}\n${context?.base_typst || ''}`)
+  if (starterId === 'receipt-basic') return 'receipt'
+  if (starterId === 'shipping-label-basic') return 'shipping_label'
+  if (starterId === 'exam-paper-basic') return 'exam_paper'
+  if (starterId === 'business-document-basic') return 'business_document'
+  if (starterId === 'invitation-basic') return 'invitation'
+  return ''
+}
+
+const buildDesignBriefSection = (documentType: string) => {
+  const designBrief = documentType ? getDesignBriefForDocumentType(documentType) : ''
+  if (!designBrief) return ''
+  return `当前文档类型设计规范 (${documentType})：
+${designBrief}`
 }
 
 const extractText = (value: unknown): string => {
@@ -374,6 +454,65 @@ const latestUserText = (messages: GenerateRequest['messages']) => {
     if ((message as { role?: string }).role === 'user') return extractText(message)
   }
   return ''
+}
+
+const SERVER_TOOL_HISTORY_KEEP_MESSAGES = 12
+const SERVER_MAX_TEXT_PART_CHARS = 1200
+
+const compactToolPartForModel = (part: Record<string, unknown>) => {
+  const input = part.input && typeof part.input === 'object' ? part.input as Record<string, unknown> : {}
+  const output = part.output && typeof part.output === 'object' ? part.output as Record<string, unknown> : undefined
+  const file = typeof input.file === 'string' ? input.file : typeof output?.file === 'string' ? output.file : undefined
+  const starterId = typeof input.starterId === 'string' ? input.starterId : undefined
+  const fileCount = input.files && typeof input.files === 'object' ? Object.keys(input.files as Record<string, unknown>).length : undefined
+  const ok = typeof output?.ok === 'boolean' ? output.ok : undefined
+  const error = typeof output?.error === 'string' ? output.error.slice(0, 600) : undefined
+  const changedFiles = Array.isArray(output?.changedFiles) ? output.changedFiles.filter((item): item is string => typeof item === 'string') : []
+
+  return {
+    type: typeof part.type === 'string' ? part.type : 'tool',
+    ...(typeof part.toolCallId === 'string' ? { toolCallId: part.toolCallId } : {}),
+    state: typeof part.state === 'string' ? part.state : undefined,
+    input: {
+      ...(file ? { file } : {}),
+      ...(starterId ? { starterId } : {}),
+      ...(fileCount !== undefined ? { fileCount } : {}),
+    },
+    output: {
+      ...(ok !== undefined ? { ok } : {}),
+      ...(error ? { error } : {}),
+      ...(changedFiles.length > 0 ? { changedFiles } : {}),
+    },
+  }
+}
+
+const compactMessagesForModel = (messages: GenerateRequest['messages'], keepRecentToolDetails: boolean): GenerateRequest['messages'] => {
+  const firstToolMessageToKeep = keepRecentToolDetails ? Math.max(0, messages.length - SERVER_TOOL_HISTORY_KEEP_MESSAGES) : messages.length
+  return messages.map((message, messageIndex) => {
+    const parts = Array.isArray((message as any).parts) ? (message as any).parts : []
+    const keepToolDetails = messageIndex >= firstToolMessageToKeep
+    return {
+      ...message,
+      role: (message as any).role,
+      parts: parts
+        .map((part: unknown) => {
+          if (!part || typeof part !== 'object') return part
+          const record = part as Record<string, unknown>
+          const type = typeof record.type === 'string' ? record.type : ''
+          if (type === 'text' && typeof record.text === 'string' && record.text.length > SERVER_MAX_TEXT_PART_CHARS) {
+            return { ...record, text: `${record.text.slice(0, SERVER_MAX_TEXT_PART_CHARS)}\n\n[历史消息已截断]` }
+          }
+          if (type.startsWith('tool-') && !keepToolDetails) {
+            return compactToolPartForModel(record)
+          }
+          return part
+        })
+        .filter((part: unknown) => {
+          if (!part || typeof part !== 'object') return true
+          return (part as Record<string, unknown>).type !== 'step-start'
+        }),
+    }
+  })
 }
 
 // ponytail: keyword matcher; replace with explicit user template selection if this grows.
@@ -392,10 +531,11 @@ const inferStarterId = (text: string) => {
 const buildStarterHintSection = (messages: GenerateRequest['messages']) => {
   if (!inferStarterId(latestUserText(messages))) return ''
   return `用户请求疑似命中内置模板类型。
-在调用 update_template_bundle 前，必须按顺序显式调用工具：
+首次生成完整模板时，在调用 update_template_bundle 前，必须按顺序显式调用工具：
 1. list_template_starters({})
 2. 从返回列表中选择最合适的 starterId，再调用 get_starter_context({ "starterId": "..." })
-不要跳过 list_template_starters，也不要只根据当前模板上下文直接手写整套 Typst。`
+不要跳过 list_template_starters，也不要只根据当前模板上下文直接手写整套 Typst。
+如果当前已经有模板，用户只是要求修复编译错误或做局部调整，必须先调用 read_template_bundle_file，再使用 apply_template_bundle_patch 局部修改，不要整份重写。`
 }
 
 const aiStreamErrorMessage = (error: unknown) => {
@@ -439,7 +579,8 @@ app.post('/generate', requireAuth, async (c) => {
       ...clientTools,
     }
 
-    const modelMessages = await convertToModelMessages(messages, {
+    const compactedMessages = compactMessagesForModel(messages, true)
+    const modelMessages = await convertToModelMessages(compactedMessages, {
       tools: allTools,
       ignoreIncompleteToolCalls: true,
     })
@@ -450,6 +591,8 @@ app.post('/generate', requireAuth, async (c) => {
       : resolveModelFromEnv(c.env)
 
     const templateContextSection = buildTemplateContextSection(context)
+    const documentType = inferDocumentTypeFromContext(context, messages)
+    const designBriefSection = buildDesignBriefSection(documentType)
     const starterHintSection = buildStarterHintSection(messages)
 
     const systemPrompt = `${TYPST_SYSTEM_PROMPT}
@@ -464,11 +607,13 @@ ${TYPST_QUICK_RULES.map((rule, idx) => `${idx + 1}. ${rule}`).join('\n')}
 
 当前上下文：
 - template_id=${context?.template_id || 'unknown'}
+- document_type=${documentType || 'unknown'}
 - provider_type=${providerType}
 - model=${model}
 - api_mode=${apiMode}
 
 ${templateContextSection}
+${designBriefSection ? `\n\n${designBriefSection}` : ''}
 ${starterHintSection ? `\n\n${starterHintSection}` : ''}`
 
     const runGenerate = (model: any) => streamText({
@@ -699,7 +844,7 @@ app.get('/templates/:id/ai-thread', requireAuth, async (c) => {
   }
 
   const messagesRaw = await db
-    .prepare('SELECT id, role, parts_json, created_at FROM ai_messages WHERE thread_id = ? ORDER BY created_at ASC')
+    .prepare('SELECT id, role, parts_json, position, created_at FROM ai_messages WHERE thread_id = ? ORDER BY position ASC, created_at ASC, id ASC')
     .bind(thread.id)
     .all()
 
@@ -715,6 +860,7 @@ app.get('/templates/:id/ai-thread', requireAuth, async (c) => {
       id: item.id as string,
       role: item.role as string,
       parts,
+      position: typeof item.position === 'number' ? item.position : Number(item.position || 0),
       created_at: item.created_at as number,
     }
   })
@@ -763,13 +909,23 @@ app.put('/templates/:id/ai-thread/messages', requireAuth, async (c) => {
     thread = { id: threadId }
   }
 
+  if (messages.length === 0) {
+    const existingCount = await db
+      .prepare('SELECT COUNT(1) as cnt FROM ai_messages WHERE thread_id = ?')
+      .bind(thread.id)
+      .first<{ cnt: number | string }>()
+    if (Number(existingCount?.cnt || 0) > 0) {
+      return c.json({ success: true, skipped: 'empty_messages_preserved' })
+    }
+  }
+
   await db.prepare('DELETE FROM ai_messages WHERE thread_id = ?').bind(thread.id).run()
-  for (const message of messages) {
+  for (const [index, message] of messages.entries()) {
     const role = typeof message.role === 'string' ? message.role : 'assistant'
     const parts = Array.isArray(message.parts) ? message.parts : []
     await db
-      .prepare('INSERT INTO ai_messages (id, thread_id, role, parts_json) VALUES (?, ?, ?, ?)')
-      .bind(crypto.randomUUID(), thread.id, role, JSON.stringify(parts))
+      .prepare('INSERT INTO ai_messages (id, thread_id, role, parts_json, position) VALUES (?, ?, ?, ?, ?)')
+      .bind(crypto.randomUUID(), thread.id, role, JSON.stringify(parts), index)
       .run()
   }
 

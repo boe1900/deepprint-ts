@@ -43,6 +43,18 @@
       },
       "additionalProperties": true
     },
+    "callout": {
+      "type": "object",
+      "properties": {
+        "label": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": true
+    },
     "items": {
       "type": "array",
       "items": {
