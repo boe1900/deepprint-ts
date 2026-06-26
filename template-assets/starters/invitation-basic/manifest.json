@@ -1,0 +1,11 @@
+{
+  "kind": "template_bundle",
+  "version": "v1",
+  "id": "invitation-basic",
+  "document_type": "invitation",
+  "mode": "parametric",
+  "data_contract": "invitation.basic.v1",
+  "entry": "template.typ",
+  "data": "data.json",
+  "data_schema": "data.schema.json"
+}

@@ -85,9 +85,9 @@ const TYPST_SYSTEM_PROMPT = `你是 DeepPrint 的 Typst 模版编辑 Agent。
 5. data.json 是完整模拟数据，字段必须与 data.schema.json 和 template.typ 一致。
 6. 优先保留用户已有结构，仅修改用户要求的部分。
 7. template.typ 通过 \`#let data = json("data.json")\` 读取数据，请确保代码可编译。
-8. 新建模板或切换模板类型时，先调用 \`list_template_starters\` 查看全部 starter 摘要，再选择一个 starterId 调用 \`get_starter_context\`。
-9. 必须基于 \`get_starter_context\` 返回的 starter 和 componentSource 排版，优先内联/改造现有组件模式；只有 starter 和组件源码都覆盖不了时，才少量手写 Typst。
-10. 最终 files map 不能包含 lib/ 文件；不要保留本地 \`#import "lib/..."\`。允许使用 Typst Universe 包 import，例如条码/二维码包。
+8. 只要用户要求生成完整领域模板，或请求明显属于内置类型（小票、面单、试卷、商务文档、邀请函），必须按顺序显式调用工具：先 \`list_template_starters\`，再从返回列表中选择 starterId 调用 \`get_starter_context\`；不能直接手写整套 Typst。
+9. 必须基于 \`get_starter_context\` 返回的 starter、componentSource 和 designBrief 排版，优先内联/改造现有组件模式；只有 starter 和组件源码都覆盖不了时，才少量手写 Typst。
+10. 最终 files map 不能包含 lib/ 文件；不要保留本地 \`#import "lib/..."\`。Typst package import 只允许 \`@preview/tiaoma:0.3.0\`，用于条码/二维码；不要使用其他 package import。
 
 输出风格：
 - 纯咨询时，直接回答问题，不输出代码块。
@@ -100,7 +100,7 @@ const TYPST_QUICK_RULES = [
   '先复用已有变量名和结构，避免大范围重写。',
   '使用 data 时优先 data.at("key", default: "...") 兜底，避免缺字段报错。',
   '新增函数调用时，参数名和值保持简洁，避免传入未知参数。',
-  '二维码需要保留白底与静区；具体 Typst 包以编译结果为准。',
+  '二维码需要保留白底与静区；条码/二维码只允许使用 @preview/tiaoma:0.3.0，优先复用 starter/componentSource 里已有写法。',
   '在网格/表格布局中，列数和内容数量保持一致。',
   '字符串插值和引号必须成对闭合。',
   '修改后若工具返回编译错误，必须基于错误继续修复。',
@@ -361,6 +361,43 @@ ${dataContent}
 \`\`\``
 }
 
+const extractText = (value: unknown): string => {
+  if (typeof value === 'string') return value
+  if (!value || typeof value !== 'object') return ''
+  if (Array.isArray(value)) return value.map(extractText).filter(Boolean).join('\n')
+  const record = value as Record<string, unknown>
+  return [record.text, record.content, record.parts].map(extractText).filter(Boolean).join('\n')
+}
+
+const latestUserText = (messages: GenerateRequest['messages']) => {
+  for (const message of [...messages].reverse()) {
+    if ((message as { role?: string }).role === 'user') return extractText(message)
+  }
+  return ''
+}
+
+// ponytail: keyword matcher; replace with explicit user template selection if this grows.
+const inferStarterId = (text: string) => {
+  const normalized = text.toLowerCase()
+  const matchers: Array<[string, string[]]> = [
+    ['receipt-basic', ['小票', '收据', '点单', '取货码', '取餐码', '热敏', '奶茶', 'receipt', 'cashier']],
+    ['shipping-label-basic', ['面单', '快递', '物流', '运单', 'shipping label', 'waybill']],
+    ['exam-paper-basic', ['试卷', '考试', '练习题', 'quiz', 'exam', 'worksheet']],
+    ['business-document-basic', ['发票', '报价单', '账单', '合同', 'invoice', 'quotation', 'statement']],
+    ['invitation-basic', ['请帖', '邀请函', '婚礼', '活动邀请', 'invitation', 'wedding']],
+  ]
+  return matchers.find(([, keywords]) => keywords.some((keyword) => normalized.includes(keyword)))?.[0]
+}
+
+const buildStarterHintSection = (messages: GenerateRequest['messages']) => {
+  if (!inferStarterId(latestUserText(messages))) return ''
+  return `用户请求疑似命中内置模板类型。
+在调用 update_template_bundle 前，必须按顺序显式调用工具：
+1. list_template_starters({})
+2. 从返回列表中选择最合适的 starterId，再调用 get_starter_context({ "starterId": "..." })
+不要跳过 list_template_starters，也不要只根据当前模板上下文直接手写整套 Typst。`
+}
+
 const aiStreamErrorMessage = (error: unknown) => {
   const err = error as { message?: string; statusCode?: number; lastError?: { message?: string; statusCode?: number } }
   const statusCode = err?.statusCode ?? err?.lastError?.statusCode
@@ -372,14 +409,14 @@ const aiStreamErrorMessage = (error: unknown) => {
 
 const starterTools = {
   list_template_starters: tool({
-    description: '列出 DeepPrint 内置的全部模板 starter 摘要。新建模板或切换模板类型时先调用它，然后只选择一个最合适的 starterId。',
+    description: '列出 DeepPrint 内置的全部模板 starter 摘要。生成完整领域模板或请求小票/面单/试卷/商务文档/邀请函时必须先调用它，然后只选择一个最合适的 starterId。',
     inputSchema: z.object({}),
     execute: async () => ({
       starters: listTemplateStarters(),
     }),
   }),
   get_starter_context: tool({
-    description: '读取一个 starter 的完整上下文，包含 starter 四个文件以及同领域 componentSource。拿到后必须优先基于这些内容生成自包含 TemplateBundle。',
+    description: '读取一个 starter 的完整上下文，包含 starter 四个文件、同领域 componentSource 和 designBrief。拿到后必须优先基于这些内容生成自包含 TemplateBundle，不能跳过后直接手写整套 Typst。',
     inputSchema: z.object({
       starterId: z.string().describe('来自 list_template_starters 返回结果的 starterId。'),
     }),
@@ -413,6 +450,7 @@ app.post('/generate', requireAuth, async (c) => {
       : resolveModelFromEnv(c.env)
 
     const templateContextSection = buildTemplateContextSection(context)
+    const starterHintSection = buildStarterHintSection(messages)
 
     const systemPrompt = `${TYPST_SYSTEM_PROMPT}
 
@@ -421,7 +459,7 @@ ${TYPST_QUICK_RULES.map((rule, idx) => `${idx + 1}. ${rule}`).join('\n')}
 
 约束：
 1. Typst 字体、包解析与可用性以 typst-json-render 的编译结果为准，DeepPrint 不维护白名单。
-2. 需要条码或二维码时可以使用 Typst 生态常见包；若编译失败，按错误信息最小改动修复。
+2. 需要条码或二维码时，只允许使用 allowlist 包 \`@preview/tiaoma:0.3.0\`；若编译失败，按错误信息最小改动修复。
 3. 工具错误中若包含 line/column/snippet，优先围绕该位置最小改动修复。
 
 当前上下文：
@@ -430,7 +468,8 @@ ${TYPST_QUICK_RULES.map((rule, idx) => `${idx + 1}. ${rule}`).join('\n')}
 - model=${model}
 - api_mode=${apiMode}
 
-${templateContextSection}`
+${templateContextSection}
+${starterHintSection ? `\n\n${starterHintSection}` : ''}`
 
     const runGenerate = (model: any) => streamText({
       model,

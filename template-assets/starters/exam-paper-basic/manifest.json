@@ -1,0 +1,11 @@
+{
+  "kind": "template_bundle",
+  "version": "v1",
+  "id": "exam-paper-basic",
+  "document_type": "exam_paper",
+  "mode": "parametric",
+  "data_contract": "exam.paper.basic.v1",
+  "entry": "template.typ",
+  "data": "data.json",
+  "data_schema": "data.schema.json"
+}

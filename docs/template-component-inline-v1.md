@@ -71,12 +71,13 @@ template-assets/
       data.json
       data.schema.json
       manifest.json
+      design.md
     invitation-basic/
       ...
 ```
 
 `components/*.typ` 只给 DeepPrint 和 AI 使用。用户模板不直接引用这些文件。
-`starters/` 只提供页面尺寸、基础容器、默认风格和最小示例，不负责声明完整组件依赖，也不需要额外的 starter 配置文件。
+`starters/` 只提供页面尺寸、基础容器、默认风格、最小示例和同类型设计约束，不负责声明完整组件依赖。
 
 第一版不要把组件库拆得过细。很多领域一个文件就能装下主要能力。先做“每个领域一个组件文件”，等以后文件真的过大、维护痛了，再拆成更小颗粒。
 
@@ -116,8 +117,8 @@ template-assets/
 ```text
 用户选择模板类型或自然语言描述
 -> DeepPrint 选择 starter
--> DeepPrint 同时提供同领域 component source
--> AI 优先基于 starter + component source 排版
+-> DeepPrint 同时提供同领域 component source 和 design brief
+-> AI 优先基于 starter + component source + design brief 排版
 -> 必要时少量补写 Typst
 -> 内联组件代码到 template.typ
 -> AI 修改 template.typ / data.json / data.schema.json
@@ -173,7 +174,7 @@ Prefer adapting or inlining existing starter/component patterns instead of inven
 Only write new Typst from scratch when the starter and provided component source do not cover the required layout.
 When writing new Typst, keep it minimal and consistent with the existing starter/component style.
 Do not add local lib import statements.
-Typst Universe imports are allowed when required for barcode/QR or similar external packages.
+Only the allowlisted Typst package import `@preview/tiaoma:0.3.0` is allowed for barcode/QR.
 Do not create lib/ files.
 Keep all required Typst helpers inside template.typ.
 data.json should only contain business data that changes per render.
@@ -192,7 +193,7 @@ Do not output a schema like {"type":"object","additionalProperties":true}.
 只有当 starter 和组件源码都无法覆盖目标版式时，才允许少量手写 Typst。
 手写 Typst 时要尽量少，并保持与 starter / 组件风格一致。
 不要新增本地 lib import。
-如果条码、二维码等能力需要 Typst Universe 包，可以保留必要的外部包 import。
+条码、二维码只能使用已 allowlist 的 `@preview/tiaoma:0.3.0`。
 不要新增 lib/ 目录。
 所有必要的 Typst helper 都必须保留在 template.typ 内。
 data.json 只放每次渲染会变化的业务数据。

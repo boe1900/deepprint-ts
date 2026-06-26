@@ -1,0 +1,48 @@
+{
+  "type": "object",
+  "required": [
+    "title",
+    "message_lines",
+    "details"
+  ],
+  "properties": {
+    "eyebrow": {
+      "type": "string"
+    },
+    "title": {
+      "type": "string"
+    },
+    "subtitle": {
+      "type": "string"
+    },
+    "message_lines": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "details": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "label",
+          "value"
+        ],
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "footer": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false
+}

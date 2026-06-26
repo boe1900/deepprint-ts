@@ -1,0 +1,3 @@
+- 默认调用 exam-paper(data)，保持 A4、题区清晰和答题空间稳定。
+- 选择题使用 choice-question，两列选项；主观题使用 open-question 和 answer-box。
+- 试卷优先可读、可批改，避免装饰性布局。

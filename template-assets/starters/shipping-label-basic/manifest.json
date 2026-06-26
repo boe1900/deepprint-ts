@@ -1,0 +1,11 @@
+{
+  "kind": "template_bundle",
+  "version": "v1",
+  "id": "shipping-label-basic",
+  "document_type": "shipping_label",
+  "mode": "parametric",
+  "data_contract": "shipping.label.basic.v1",
+  "entry": "template.typ",
+  "data": "data.json",
+  "data_schema": "data.schema.json"
+}

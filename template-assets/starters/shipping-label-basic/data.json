@@ -1,0 +1,33 @@
+{
+  "carrier": {
+    "name": "Deep Express",
+    "service": "标准快递"
+  },
+  "routing": {
+    "code": "沪 A-12",
+    "destination": "上海黄浦"
+  },
+  "waybill": {
+    "number": "DP202606260001",
+    "tracking_url": "https://deepprint.local/t/DP202606260001"
+  },
+  "recipient": {
+    "name": "李四",
+    "phone": "13800000000",
+    "address": "上海市黄浦区南京东路 100 号"
+  },
+  "sender": {
+    "name": "王五",
+    "phone": "13900000000",
+    "address": "杭州市西湖区文三路 88 号"
+  },
+  "footer": {
+    "timestamp": "2026-06-26 12:30",
+    "serial": "P001",
+    "disclaimer": "请核对收寄件信息。"
+  },
+  "custom_lines": [
+    "易碎品请轻放",
+    "客户备注：前台代收"
+  ]
+}

@@ -1,0 +1,64 @@
+{
+  "type": "object",
+  "required": [
+    "carrier",
+    "routing",
+    "waybill",
+    "recipient",
+    "sender"
+  ],
+  "properties": {
+    "carrier": {
+      "type": "object",
+      "required": [
+        "name",
+        "service"
+      ],
+      "additionalProperties": true
+    },
+    "routing": {
+      "type": "object",
+      "required": [
+        "code",
+        "destination"
+      ],
+      "additionalProperties": true
+    },
+    "waybill": {
+      "type": "object",
+      "required": [
+        "number"
+      ],
+      "additionalProperties": true
+    },
+    "recipient": {
+      "type": "object",
+      "required": [
+        "name",
+        "phone",
+        "address"
+      ],
+      "additionalProperties": true
+    },
+    "sender": {
+      "type": "object",
+      "required": [
+        "name",
+        "phone",
+        "address"
+      ],
+      "additionalProperties": true
+    },
+    "footer": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "custom_lines": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "additionalProperties": false
+}

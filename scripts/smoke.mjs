@@ -1,6 +1,14 @@
 const baseUrl = process.env.DEEPPRINT_BASE_URL || 'http://127.0.0.1:3000';
 const { getStarterContext, listTemplateStarters } = await import('../functions/lib/template-assets.ts');
 
+const componentEntryByStarter = {
+  'receipt-basic': 'receipt-document',
+  'shipping-label-basic': 'shipping-label',
+  'exam-paper-basic': 'exam-paper',
+  'business-document-basic': 'business-document',
+  'invitation-basic': 'invitation-card',
+};
+
 const starters = listTemplateStarters();
 if (starters.length < 5) {
   throw new Error(`expected starter assets, got ${starters.length}`);
@@ -14,6 +22,12 @@ for (const starter of starters) {
   }
   if (!context.componentSource.source.includes('AI usage:')) {
     throw new Error(`${starter.starterId} component source needs AI usage comments`);
+  }
+  if (typeof context.designBrief !== 'string' || context.designBrief.trim().length === 0) {
+    throw new Error(`${starter.starterId} missing design brief`);
+  }
+  if (!componentEntryByStarter[starter.starterId]) {
+    throw new Error(`${starter.starterId} missing component smoke entry`);
   }
 }
 
@@ -44,6 +58,23 @@ const request = async (path, options = {}) => {
 };
 
 await request('/api/health', { headers: {} });
+
+for (const starter of starters) {
+  const context = getStarterContext(starter.starterId);
+  const entry = componentEntryByStarter[starter.starterId];
+  const componentFiles = {
+    ...context.starter.files,
+    'template.typ': `${context.componentSource.source}\n\n#let data = json("data.json")\n#${entry}(data)`,
+  };
+  await request('/api/render/compile', {
+    method: 'POST',
+    body: JSON.stringify({
+      files: componentFiles,
+      format: 'png',
+      include_artifact_base64: false,
+    }),
+  });
+}
 
 const files = {
   'manifest.json': JSON.stringify({

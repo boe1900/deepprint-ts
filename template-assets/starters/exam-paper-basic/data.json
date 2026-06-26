@@ -1,0 +1,42 @@
+{
+  "exam": {
+    "title": "期末测试卷",
+    "subject": "语文",
+    "duration": "90 分钟",
+    "total_score": "100"
+  },
+  "student_fields": [
+    "姓名",
+    "班级",
+    "学号"
+  ],
+  "sections": [
+    {
+      "title": "选择题",
+      "score": "40",
+      "questions": [
+        {
+          "type": "choice",
+          "stem": "下列词语中没有错别字的一项是？",
+          "choices": [
+            "安详",
+            "急燥",
+            "缭草",
+            "拔涉"
+          ]
+        }
+      ]
+    },
+    {
+      "title": "简答题",
+      "score": "60",
+      "questions": [
+        {
+          "type": "open",
+          "stem": "请概括文章的中心思想。",
+          "answer_space_mm": 24
+        }
+      ]
+    }
+  ]
+}

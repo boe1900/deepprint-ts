@@ -1,0 +1,11 @@
+{
+  "kind": "template_bundle",
+  "version": "v1",
+  "id": "receipt-basic",
+  "document_type": "receipt",
+  "mode": "parametric",
+  "data_contract": "receipt.basic.v1",
+  "entry": "template.typ",
+  "data": "data.json",
+  "data_schema": "data.schema.json"
+}

@@ -1,0 +1,73 @@
+{
+  "company": {
+    "name": "DeepPrint Studio",
+    "address_lines": [
+      "上海市黄浦区南京东路 100 号"
+    ],
+    "contact_lines": [
+      "hello@deepprint.local"
+    ]
+  },
+  "document": {
+    "title": "报价单",
+    "number": "Q-20260626-001"
+  },
+  "metadata": [
+    {
+      "label": "日期",
+      "value": "2026-06-26"
+    }
+  ],
+  "parties": [
+    {
+      "title": "客户",
+      "name": "示例客户",
+      "address_lines": [
+        "上海市徐汇区"
+      ],
+      "details": [
+        {
+          "label": "联系人",
+          "value": "李四"
+        }
+      ]
+    },
+    {
+      "title": "供应商",
+      "name": "DeepPrint Studio",
+      "address_lines": [
+        "上海市黄浦区"
+      ],
+      "details": [
+        {
+          "label": "电话",
+          "value": "400-000-0000"
+        }
+      ]
+    }
+  ],
+  "table": {
+    "items": [
+      {
+        "code": "DP-001",
+        "description": "模板设计服务",
+        "quantity": "1",
+        "unit_price": "¥800.00",
+        "amount": "¥800.00"
+      }
+    ]
+  },
+  "totals": [
+    {
+      "label": "合计",
+      "value": "¥800.00",
+      "emphasis": true
+    }
+  ],
+  "notes": [
+    "报价有效期 7 天。"
+  ],
+  "payment_terms": [
+    "付款后开始交付。"
+  ]
+}

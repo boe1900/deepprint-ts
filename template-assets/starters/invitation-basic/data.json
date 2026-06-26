@@ -1,0 +1,20 @@
+{
+  "eyebrow": "INVITATION",
+  "title": "婚礼请帖",
+  "subtitle": "诚邀您共同见证",
+  "message_lines": [
+    "良辰已定，佳期如约。",
+    "我们诚挚邀请您出席婚礼仪式。"
+  ],
+  "details": [
+    {
+      "label": "日期",
+      "value": "2026 年 10 月 1 日"
+    },
+    {
+      "label": "地点",
+      "value": "上海和平饭店"
+    }
+  ],
+  "footer": "敬候光临"
+}

@@ -1,0 +1,11 @@
+{
+  "kind": "template_bundle",
+  "version": "v1",
+  "id": "business-document-basic",
+  "document_type": "business_document",
+  "mode": "parametric",
+  "data_contract": "business.document.basic.v1",
+  "entry": "template.typ",
+  "data": "data.json",
+  "data_schema": "data.schema.json"
+}

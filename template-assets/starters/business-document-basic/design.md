@@ -1,0 +1,3 @@
+- 默认调用 business-document(data)，保持 A4、表格化、安静商务风格。
+- 金额和数量列右对齐，主表使用 items-table，合计使用 totals。
+- 长地址、备注和条款使用 muted-line / line-list，避免挤压主表。

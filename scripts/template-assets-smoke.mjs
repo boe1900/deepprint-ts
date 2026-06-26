@@ -18,6 +18,12 @@ for (const starter of starters) {
   if (!context.componentSource.source.includes('AI usage:')) {
     throw new Error(`${starter.starterId} component source needs AI usage comments`);
   }
+  if (typeof context.designBrief !== 'string' || context.designBrief.trim().length === 0) {
+    throw new Error(`${starter.starterId} missing design brief`);
+  }
+  if (context.componentSource.source.includes('label-value-row(left, right,')) {
+    throw new Error(`${starter.starterId} shadows Typst right alignment in label-value-row`);
+  }
 }
 
 console.log(`Template assets smoke passed (${starters.length} starters)`);

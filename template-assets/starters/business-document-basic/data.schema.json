@@ -1,0 +1,74 @@
+{
+  "type": "object",
+  "required": [
+    "company",
+    "document",
+    "table",
+    "totals"
+  ],
+  "properties": {
+    "company": {
+      "type": "object",
+      "required": [
+        "name"
+      ],
+      "additionalProperties": true
+    },
+    "document": {
+      "type": "object",
+      "required": [
+        "title",
+        "number"
+      ],
+      "additionalProperties": true
+    },
+    "metadata": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "parties": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "table": {
+      "type": "object",
+      "required": [
+        "items"
+      ],
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "totals": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    "notes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "payment_terms": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "additionalProperties": false
+}

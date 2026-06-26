@@ -1,0 +1,3 @@
+- 默认调用 invitation-card(data)，保持单页、居中、留白充分。
+- 标题、正文、详情和 footer 使用现有 invitation helpers，避免多页和过密信息。
+- 邀请函可以有装饰边框，但内容必须完整留在页面内。

@@ -1,0 +1,50 @@
+{
+  "type": "object",
+  "required": [
+    "exam",
+    "sections"
+  ],
+  "properties": {
+    "exam": {
+      "type": "object",
+      "required": [
+        "title",
+        "subject"
+      ],
+      "additionalProperties": true
+    },
+    "student_fields": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "sections": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "title",
+          "questions"
+        ],
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "score": {
+            "type": "string"
+          },
+          "questions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          }
+        },
+        "additionalProperties": true
+      }
+    }
+  },
+  "additionalProperties": false
+}
