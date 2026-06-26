@@ -1,12 +1,14 @@
 import { Hono } from 'hono'
 import { createMiddleware } from 'hono/factory'
-import { convertToModelMessages, stepCountIs, streamText } from 'ai'
+import { convertToModelMessages, stepCountIs, streamText, tool } from 'ai'
 import { frontendTools } from '@assistant-ui/react-ai-sdk'
+import { z } from 'zod'
 import { createAuth } from '../lib/auth'
 import { resolveModelFromConfig, resolveModelFromEnv } from '../lib/ai-provider'
 import { evaluateTrialGenerationLimit, recordSuccessfulGeneration } from '../lib/trial-generation-limit'
 import { compileTemplateBundle, validateTemplateBundle } from '../lib/render-client'
 import { normalizeTemplateBundleFiles, type RenderFormat, type TemplateBundleFiles } from '../lib/template-bundle'
+import { getStarterContext, listTemplateStarters } from '../lib/template-assets'
 import type { AppDatabase } from '../lib/db-types'
 
 export type Bindings = {
@@ -83,6 +85,9 @@ const TYPST_SYSTEM_PROMPT = `你是 DeepPrint 的 Typst 模版编辑 Agent。
 5. data.json 是完整模拟数据，字段必须与 data.schema.json 和 template.typ 一致。
 6. 优先保留用户已有结构，仅修改用户要求的部分。
 7. template.typ 通过 \`#let data = json("data.json")\` 读取数据，请确保代码可编译。
+8. 新建模板或切换模板类型时，先调用 \`list_template_starters\` 查看全部 starter 摘要，再选择一个 starterId 调用 \`get_starter_context\`。
+9. 必须基于 \`get_starter_context\` 返回的 starter 和 componentSource 排版，优先内联/改造现有组件模式；只有 starter 和组件源码都覆盖不了时，才少量手写 Typst。
+10. 最终 files map 不能包含 lib/ 文件；不要保留本地 \`#import "lib/..."\`。允许使用 Typst Universe 包 import，例如条码/二维码包。
 
 输出风格：
 - 纯咨询时，直接回答问题，不输出代码块。
@@ -90,7 +95,7 @@ const TYPST_SYSTEM_PROMPT = `你是 DeepPrint 的 Typst 模版编辑 Agent。
 - 不要让用户手动复制代码。`
 
 const TYPST_QUICK_RULES = [
-  '每次输出完整可编译 Typst 代码，不要省略 import / #set / #let 依赖。',
+  '每次输出完整可编译 Typst 代码，不要省略必要的 #set / #let；最终模板必须自包含。',
   '不要编造函数参数；不确定参数时，优先采用更保守写法。',
   '先复用已有变量名和结构，避免大范围重写。',
   '使用 data 时优先 data.at("key", default: "...") 兜底，避免缺字段报错。',
@@ -365,6 +370,23 @@ const aiStreamErrorMessage = (error: unknown) => {
     : `AI 请求失败：${message}`
 }
 
+const starterTools = {
+  list_template_starters: tool({
+    description: '列出 DeepPrint 内置的全部模板 starter 摘要。新建模板或切换模板类型时先调用它，然后只选择一个最合适的 starterId。',
+    inputSchema: z.object({}),
+    execute: async () => ({
+      starters: listTemplateStarters(),
+    }),
+  }),
+  get_starter_context: tool({
+    description: '读取一个 starter 的完整上下文，包含 starter 四个文件以及同领域 componentSource。拿到后必须优先基于这些内容生成自包含 TemplateBundle。',
+    inputSchema: z.object({
+      starterId: z.string().describe('来自 list_template_starters 返回结果的 starterId。'),
+    }),
+    execute: async ({ starterId }) => getStarterContext(starterId),
+  }),
+}
+
 // AI 生成端点
 app.post('/generate', requireAuth, async (c) => {
   try {
@@ -375,9 +397,13 @@ app.post('/generate', requireAuth, async (c) => {
     // Convert assistant-ui frontend tools into AI SDK tools without duplicating
     // their schema on the server.
     const clientTools = tools && typeof tools === 'object' ? frontendTools(tools) : {}
+    const allTools = {
+      ...starterTools,
+      ...clientTools,
+    }
 
     const modelMessages = await convertToModelMessages(messages, {
-      tools: clientTools,
+      tools: allTools,
       ignoreIncompleteToolCalls: true,
     })
 
@@ -410,7 +436,7 @@ ${templateContextSection}`
       model,
       system: systemPrompt,
       messages: modelMessages,
-      tools: clientTools,
+      tools: allTools,
       providerOptions: providerType === 'openai' && apiMode === 'responses'
         ? { openai: { store: false } }
         : undefined,

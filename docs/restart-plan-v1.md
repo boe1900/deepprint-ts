@@ -41,6 +41,8 @@ Do not build self-upgrading memory, template sharing, marketplace, promotion, or
 
 Template Memory 已经从 `typst-json-render` 边界迁移到 DeepPrint 产品层设计。后续实现见 [DeepPrint Template Memory V1](./template-memory-v1.md)。
 
+组件库也放在 DeepPrint 产品层，但只作为生成素材。最终用户模板保持自包含，不要求携带 `lib/` 目录。详见 [Template Component Inline V1](./template-component-inline-v1.md)。
+
 ## 3. Template Storage
 
 Stop treating a template as only `typst_code + mock_data`.
@@ -51,8 +53,7 @@ Store a TemplateBundle file map:
 {
   "template.typ": "...",
   "data.schema.json": "{...}",
-  "data.json": "{...}",
-  "lib.typ": "..."
+  "data.json": "{...}"
 }
 ```
 
@@ -74,13 +75,117 @@ Keep the workflow boring:
 
 - build system prompt
 - provide current bundle files
-- expose one AI SDK UI client-side tool: `update_template_bundle`
+- expose starter directory/context tools before editing a new template
+- expose a few small AI SDK tools instead of a framework-scale tool set
 - define the tool once in the browser with assistant-ui `defineToolkit`
 - forward that tool schema through `AssistantChatTransport`
 - convert forwarded frontend tools on the server with `frontendTools(...)`
-- execute the tool in the browser because it mutates editor UI state
+- execute the mutation tool in the browser because it mutates editor UI state
 - call Rust validate/compile
 - return errors or preview to the UI
+
+### 4.1 Tool Boundary
+
+DeepPrint product runtime does not use MCP as the main in-app path.
+
+The actual layering is:
+
+```text
+AI SDK tool call
+-> DeepPrint server/browser handler
+-> typst-json-render HTTP API
+```
+
+So when this document says "tool", it means an AI SDK tool exposed by DeepPrint to the model. `typst-json-render` stays behind DeepPrint as a render service.
+
+### 4.2 Existing Tools And Capabilities
+
+Already present in the current product loop:
+
+- `update_template_bundle`
+  - model-visible tool
+  - applies TemplateBundle file changes to the editor/workspace
+  - triggers validate/compile as part of tool execution
+  - returns actual execution steps and compile result back into the stream
+- `POST /api/render/validate`
+  - backend capability, not directly exposed to the model
+  - wraps `typst-json-render` validation
+- `POST /api/render/compile`
+  - backend capability, not directly exposed to the model
+  - wraps `typst-json-render` compile and returns PNG by default
+
+Keep `update_template_bundle` as the only mutation tool in V1. Do not give the model separate "save file", "write schema", "write template", and "compile" tools; that just creates more chances to drift.
+
+### 4.3 Tools Needed For Starter + Component Flow
+
+To support the new "thin starter + internal component source + inline final template" path, expose two read tools:
+
+- `list_template_starters()`
+  - model-visible tool
+  - returns all starter summaries
+  - returns no file source
+  - used as the starter directory before creating a new template
+- `get_starter_context(starterId)`
+  - model-visible tool
+  - returns one starter's `manifest.json`, `template.typ`, `data.json`, and `data.schema.json`
+  - also returns the matching internal domain component source file, such as `receipt-v1.typ`
+  - used after the model picks one anchor starter
+
+Do not split `get_starter_context` into separate starter/component read tools in V1. The model should not have to remember an extra component lookup step.
+
+For an existing template, the model can edit the current bundle directly. It only needs `list_template_starters()` and `get_starter_context(starterId)` when the current bundle is empty, clearly wrong for the request, or the user asks to switch template type.
+
+The model should follow three hard rules:
+
+1. Call `list_template_starters()` before creating a new template or switching template type.
+2. Choose exactly 1 starter as the anchor.
+3. Call `get_starter_context(starterId)` for that starter.
+4. Use the provided starter as the base layout and the provided component source as the primary domain reference.
+5. Only write new Typst when the starter and component source do not cover the required layout.
+6. When writing new Typst, keep it minimal and consistent with the provided style.
+
+This avoids the usual "template stitching" mess.
+
+### 4.4 Tool Contract Shape
+
+`list_template_starters()` returns every starter summary, but no source code:
+
+```json
+[
+  {
+    "starterId": "receipt-basic",
+    "title": "58mm receipt basic",
+    "documentType": "receipt",
+    "summary": "Single-page narrow thermal receipt starter.",
+    "whenToUse": ["order receipt", "takeaway receipt", "cashier ticket"],
+    "avoidFor": ["invitation", "a4 document", "exam paper"]
+  }
+]
+```
+
+`get_starter_context(starterId)` returns:
+
+```json
+{
+  "starter": {
+    "starterId": "receipt-basic",
+    "documentType": "receipt",
+    "files": {
+      "manifest.json": "...",
+      "template.typ": "...",
+      "data.json": "...",
+      "data.schema.json": "..."
+    }
+  },
+  "componentSource": {
+    "componentId": "receipt-v1",
+    "documentType": "receipt",
+    "source": "..."
+  }
+}
+```
+
+### 4.5 Flow
 
 ```mermaid
 sequenceDiagram
@@ -93,16 +198,32 @@ sequenceDiagram
   User->>Browser: Ask to edit a template
   Browser->>Hono: messages + current bundle + frontend tool schema
   Hono->>LLM: streamText(messages, tools)
+  LLM-->>Hono: tool call: list_template_starters()
+  Hono-->>LLM: all starter summaries
+  LLM-->>Hono: tool call: get_starter_context(starterId)
+  Hono-->>LLM: starter files + component source
   LLM-->>Hono: tool call: update_template_bundle(files)
   Hono-->>Browser: stream tool call
   Browser->>Browser: execute client-side tool and update editor state
   Browser->>Hono: /render/validate(files)
   Hono->>Render: validate TemplateBundle
   Render-->>Hono: ok or diagnostics
+  Hono->>Render: compile TemplateBundle when validation passes
+  Render-->>Hono: PNG preview or diagnostics
   Hono-->>Browser: compile feedback
   Browser-->>Hono: tool result for next AI step
   Hono->>LLM: continue if repair is needed
   LLM-->>Browser: final assistant message
+```
+
+Prompt rule for the model:
+
+```text
+Use the provided starter as the base layout.
+Use the provided component source as the primary reference for domain-specific layout and helpers.
+Prefer adapting or inlining existing starter/component patterns instead of inventing new Typst structure.
+Only write new Typst from scratch when the starter and component source do not cover the required layout.
+When writing new Typst, keep it minimal and consistent with the existing starter/component style.
 ```
 
 Do not add Flue, Mastra, LangGraph, or a custom agent framework in V1. Add one only after this direct workflow becomes hard to maintain.

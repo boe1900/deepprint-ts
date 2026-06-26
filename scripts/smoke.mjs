@@ -1,4 +1,22 @@
 const baseUrl = process.env.DEEPPRINT_BASE_URL || 'http://127.0.0.1:3000';
+const { getStarterContext, listTemplateStarters } = await import('../functions/lib/template-assets.ts');
+
+const starters = listTemplateStarters();
+if (starters.length < 5) {
+  throw new Error(`expected starter assets, got ${starters.length}`);
+}
+for (const starter of starters) {
+  const context = getStarterContext(starter.starterId);
+  for (const name of ['manifest.json', 'template.typ', 'data.json', 'data.schema.json']) {
+    if (!context.starter.files[name]) {
+      throw new Error(`${starter.starterId} missing ${name}`);
+    }
+  }
+  if (!context.componentSource.source.includes('AI usage:')) {
+    throw new Error(`${starter.starterId} component source needs AI usage comments`);
+  }
+}
+
 const headers = {
   'content-type': 'application/json',
   'x-deepprint-dev-user-id': 'smoke-user',

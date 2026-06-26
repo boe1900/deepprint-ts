@@ -12,6 +12,7 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
+    "smoke:assets": "node scripts/template-assets-smoke.mjs",
     "check": "npm run lint && npm run build",
     "preview": "npm run build && npm run start"
   },
