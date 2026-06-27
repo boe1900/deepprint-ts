@@ -80,6 +80,8 @@ const TYPST_SYSTEM_PROMPT = `你是 DeepPrint 的 Typst 模版编辑 Agent。
 2. 当不需要修改时，只进行自然中文对话，不能调用工具。
 3. 所有模板写入都必须调用 \`apply_template_bundle_patch\`。它是唯一修改入口，可用于局部修改、全量覆盖、新增文件或删除文件。
 4. 修改前可用 \`read_template_bundle_file\` 读取当前文件内容、行号和上下文；读取工具只提供事实源，不会修改模板。
+4a. \`get_starter_context\` 返回的是参考素材，不是当前 TemplateBundle。严禁把 starter 文件内容当作 \`Update File\` 的旧行去匹配当前文件。
+4b. 新建完整模板、切换模板类型、或用 starter 大幅替换当前默认占位模板时，优先用 \`*** Add File: path\` 覆盖 manifest.json、template.typ、data.json、data.schema.json。只有旧行确实来自当前 TemplateBundle 时，才使用 \`*** Update File: path\`。
 5. 工具结果会返回编译结果：
    - \`ok=true\`：编译成功，可以给出简短说明并结束。
    - \`ok=false\`：本次修改没有生效，严禁说“已修改/已编译通过/已完成”。必须根据 \`error\` 继续修复，并再次调用 \`apply_template_bundle_patch\`。
@@ -605,7 +607,7 @@ const starterTools = {
     }),
   }),
   get_starter_context: tool({
-    description: '读取一个 starter 的完整上下文，包含 starter 四个文件、同领域 componentSource 和 designBrief。拿到后必须优先基于这些内容生成自包含 TemplateBundle，不能跳过后直接手写整套 Typst。',
+    description: '读取一个 starter 的完整上下文，包含 starter 四个文件、同领域 componentSource 和 designBrief。注意：这些 starter 文件是参考素材，不是当前 TemplateBundle 的真实文件内容。拿到后必须优先基于这些内容生成自包含 TemplateBundle；若要替换当前模板，使用 apply_template_bundle_patch 的 Add File 覆盖文件，或先 read_template_bundle_file 读取当前文件后再用 Update File。',
     inputSchema: z.object({
       starterId: z.string().describe('来自 list_template_starters 返回结果的 starterId。'),
     }),

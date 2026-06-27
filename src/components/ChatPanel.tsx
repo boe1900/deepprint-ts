@@ -434,13 +434,13 @@ export default function ChatPanel({
   const toolkit = useMemo(() => defineToolkit({
     apply_template_bundle_patch: {
       type: 'frontend',
-      description: 'Codex-like 结构化 patch 工具，用于修改当前 TemplateBundle。模型可以自行决定补丁粒度，可局部修改、全量覆盖、新增或删除文件。格式：*** Begin Patch / *** Add File: path / +内容，或 *** Update File: path / @@ optional anchor / 空格上下文行 / - 删除行 / + 新增行，或 *** Delete File: path / *** End Patch。不要包 Markdown 代码围栏。',
+      description: 'Codex-like 结构化 patch 工具，用于修改当前 TemplateBundle。模型可以自行决定补丁粒度，可局部修改、全量覆盖、新增或删除文件。格式：*** Begin Patch / *** Add File: path / +内容，或 *** Update File: path / @@ optional anchor / 空格上下文行 / - 删除行 / + 新增行，或 *** Delete File: path / *** End Patch。不要包 Markdown 代码围栏。Update File 的旧行必须来自当前 TemplateBundle；starter 文件只是参考素材。新建完整模板或替换默认占位模板时，用 Add File 覆盖整文件。',
       parameters: {
         type: 'object',
         properties: {
           patch: {
             type: 'string',
-            description: '原始结构化 patch 文本，不要包含 Markdown 代码围栏。支持 *** Add File、*** Update File、*** Delete File；Add File 可创建或覆盖 bundle 内文件。',
+            description: '原始结构化 patch 文本，不要包含 Markdown 代码围栏。支持 *** Add File、*** Update File、*** Delete File；Add File 可创建或覆盖 bundle 内文件。若旧行不是从当前文件读取的，不要用 Update File，直接用 Add File 覆盖。',
           },
         },
         required: ['patch'],
