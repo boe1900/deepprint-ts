@@ -17,37 +17,39 @@
 // Purpose: central spacing and column tuning for 58mm/80mm thermal paper.
 // Inputs: width.
 // Use when: creating the top-level receipt layout.
-// Rules: keep columns and gaps derived from this preset so Chinese labels align.
+// Rules: margins and columns follow the receipt design brief physical limits.
 #let receipt-preset(width: 58mm) = {
   if width <= 58.5mm {
     (
       width: 58mm,
-      margin: 2.5mm,
+      margin-x: 4mm,
+      margin-y: 2mm,
       text-size: 8.6pt,
       section-gap: 2.2mm,
       row-gap: 1.6pt,
       item-name: 1fr,
-      item-qty: 9mm,
-      item-amount: 14mm,
+      item-qty: 14mm,
+      item-amount: 18mm,
       label-value: 18mm,
       gutter: 4pt,
-      qr-size: 18mm,
+      qr-size: 28mm,
       callout-size: 24pt,
       bottom-spacer: 25pt,
     )
   } else {
     (
       width: 80mm,
-      margin: 4mm,
+      margin-x: 6mm,
+      margin-y: 3mm,
       text-size: 9pt,
       section-gap: 3mm,
       row-gap: 2.2pt,
       item-name: 1fr,
-      item-qty: 12mm,
-      item-amount: 18mm,
+      item-qty: 20mm,
+      item-amount: 23mm,
       label-value: 24mm,
       gutter: 6pt,
-      qr-size: 21mm,
+      qr-size: 38mm,
       callout-size: 28pt,
       bottom-spacer: 35pt,
     )
@@ -55,14 +57,23 @@
 }
 
 // safe-page
-// Purpose: lock physical paper width and clip overflow.
+// Purpose: lock physical paper width, apply safe margins, and clip overflow.
 // Inputs: preset, body.
 // Use when: wrapping the whole receipt.
 // Rules: never remove clip:true for thermal paper.
 #let safe-page(preset, body) = {
   set page(width: preset.width, height: auto, margin: 0pt)
-  set text(font: "Noto Sans CJK SC", size: preset.text-size, top-edge: "bounds", bottom-edge: "bounds")
-  block(width: preset.width, inset: preset.margin, clip: true)[#body]
+  set text(
+    font: ("PingFang SC", "Noto Sans CJK SC", "Arial"),
+    size: preset.text-size,
+    top-edge: "bounds",
+    bottom-edge: "bounds",
+  )
+  block(
+    width: preset.width,
+    inset: (x: preset.margin-x, y: preset.margin-y),
+    clip: true,
+  )[#body]
 }
 
 // safe-text
@@ -83,15 +94,25 @@
   if fill != auto and fill != none {
     args.insert("fill", fill)
   }
-  block(clip: true)[
+  block(width: 100%, clip: true)[
     #text(..args)[#content]
+  ]
+}
+
+// safe-id
+// Purpose: render long order numbers, hash values, or other dense IDs.
+// Inputs: body, preset.
+// Use when: IDs have little natural whitespace.
+#let safe-id(body, preset) = {
+  block(width: 100%, clip: true)[
+    #text(size: preset.text-size * 0.82, font: "Noto Sans Mono")[#str(body)]
   ]
 }
 
 // muted-text
 // Purpose: small secondary receipt text without exposing raw fill:none risk.
 // Inputs: body, optional size/weight.
-#let muted-text(body, size: 7pt, weight: 400) = safe-text(
+#let muted-text(body, size: 7.5pt, weight: 400) = safe-text(
   body,
   size: size,
   weight: weight,
@@ -133,7 +154,11 @@
     #safe-text(store.name, size: 11pt, weight: 700)
     #if "address" in store [#linebreak()#safe-text(store.address, size: 7pt)]
     #linebreak()
-    #text(size: 7pt)[订单 #order.number#if "time" in order [ · #order.time]]
+    #safe-text("订单号: " + str(order.number), size: 7.5pt)
+    #if "time" in order [
+      #linebreak()
+      #safe-text("时间: " + str(order.time), size: 7.5pt)
+    ]
   ]
   section-gap(preset, dashed: true)
 }
@@ -164,6 +189,25 @@
   }
 }
 
+// receipt-note
+// Purpose: render remarks, delivery notes, or long address-like blocks.
+// Inputs: note text, preset.
+// Rules: notes are independent full-width blocks, never beside amounts.
+#let receipt-note(note, preset) = {
+  if note != none and str(note) != "" {
+    block(
+      width: 100%,
+      fill: rgb("F3F4F6"),
+      inset: 5pt,
+      radius: 2pt,
+      breakable: false,
+    )[
+      #safe-text(note, size: preset.text-size * 0.9)
+    ]
+    v(preset.row-gap)
+  }
+}
+
 // receipt-callout
 // Purpose: large centered visual callout.
 // Inputs: callout with value and optional label, preset.
@@ -172,33 +216,50 @@
 // Rules: keep it independent, centered, and much larger than body text.
 #let receipt-callout(callout, preset) = {
   if callout != none and "value" in callout and str(callout.value) != "" {
-    align(center)[
-      #text(size: 7pt, fill: rgb("6B7280"), weight: 700)[#get(callout, "label", default: "取餐号")]
-      #linebreak()
-      #v(1mm)
-      #text(size: preset.callout-size, weight: 900, top-edge: "bounds", bottom-edge: "bounds")[#str(callout.value)]
+    block(width: 100%, breakable: false)[
+      #align(center)[
+        #text(size: 8pt, fill: rgb("6B7280"), weight: 700)[#get(callout, "label", default: "取餐号")]
+        #linebreak()
+        #v(1.5mm)
+        #text(size: preset.callout-size, weight: 900, top-edge: "bounds", bottom-edge: "bounds")[#str(callout.value)]
+      ]
     ]
     section-gap(preset, dashed: true)
   }
 }
 
 // receipt-item-row
-// Purpose: one product line.
-// Inputs: name, qty, amount, preset.
+// Purpose: one product line with optional unit-price formula.
+// Inputs: item with name, qty, amount, optional formula, preset.
 // Use when: rendering the main item list.
-// Avoid: multi-line notes; put notes in footer.
-// Rules: keep qty and amount right aligned and top aligned.
-#let receipt-item-row(name, qty, amount, preset) = grid(
-  columns: (preset.item-name, preset.item-qty, preset.item-amount),
-  gutter: preset.gutter,
-  align: (left + top, right + top, right + top),
-  safe-text(name),
-  align(right)[#str(qty)],
-  align(right)[#str(amount)],
-)
+// Rules: qty and amount stay fixed-width, right aligned, and top aligned.
+#let receipt-item-row(item, preset) = {
+  let name = get(item, "name", default: "")
+  let qty = get(item, "qty", default: "")
+  let amount = get(item, "amount", default: "")
+  let formula = get(item, "formula", default: none)
+  let row = grid(
+    columns: (preset.item-name, preset.item-qty, preset.item-amount),
+    gutter: preset.gutter,
+    align: (left + top, right + top, right + top),
+    safe-text(name),
+    align(right)[#str(qty)],
+    align(right)[#str(amount)],
+  )
+
+  if formula != none and str(formula) != "" {
+    block(width: 100%, breakable: false)[
+      #row
+      #v(0.5pt)
+      #h(2pt)#muted-text(formula, size: 7.5pt)
+    ]
+  } else {
+    row
+  }
+}
 
 // receipt-items
-// Purpose: full item list with Chinese headers.
+// Purpose: full item list with Chinese headers and overflow truncation.
 // Inputs: items array, preset.
 // Use when: receipt has purchasable line items.
 #let receipt-items(items, preset) = {
@@ -212,10 +273,26 @@
   v(1.2pt)
   divider(strong: true)
   v(preset.row-gap)
-  for (index, item) in items.enumerate() {
-    if index > 0 { v(preset.row-gap) }
-    receipt-item-row(item.name, item.qty, item.amount, preset)
+
+  let display-items = items
+  let omitted-count = 0
+  if items.len() > 49 {
+    display-items = items.slice(0, 48)
+    omitted-count = items.len() - 48
   }
+
+  for (index, item) in display-items.enumerate() {
+    if index > 0 { v(preset.row-gap) }
+    receipt-item-row(item, preset)
+  }
+
+  if omitted-count > 0 {
+    v(preset.row-gap)
+    align(center)[
+      #muted-text("......（其余 " + str(omitted-count) + " 件商品已省略）", size: 7.5pt)
+    ]
+  }
+
   section-gap(preset, strong: true)
 }
 
@@ -223,10 +300,15 @@
 // Purpose: subtotal/discount/total rows.
 // Inputs: rows with label/value/emphasis, preset.
 // Use when: rendering totals near the bottom.
+// Rules: keep summary together so totals are not split away from labels.
 #let receipt-summary(rows, preset) = {
-  for (index, row) in rows.enumerate() {
-    if index > 0 { v(preset.row-gap) }
-    label-value-row(row.label, row.value, preset, weight: if get(row, "emphasis", default: false) { 700 } else { 400 })
+  if rows.len() > 0 {
+    block(width: 100%, breakable: false)[
+      #for (index, row) in rows.enumerate() {
+        if index > 0 { v(preset.row-gap) }
+        label-value-row(row.label, row.value, preset, weight: if get(row, "emphasis", default: false) { 700 } else { 400 })
+      }
+    ]
   }
 }
 
@@ -250,10 +332,12 @@
 #let receipt-badges(badges, preset) = {
   if badges.len() > 0 {
     v(3mm)
-    for (index, badge) in badges.enumerate() {
-      if index > 0 { v(1.4pt) }
-      align(center)[#fries-icon()#h(2mm)#text(size: 7pt, weight: 700)[#badge]]
-    }
+    block(width: 100%, breakable: false)[
+      #for (index, badge) in badges.enumerate() {
+        if index > 0 { v(1.4pt) }
+        align(center)[#fries-icon()#h(2mm)#text(size: 7.5pt, weight: 700)[#badge]]
+      }
+    ]
   }
 }
 
@@ -261,16 +345,19 @@
 // Purpose: centered QR code block.
 // Inputs: qr with value/label, preset.
 // Use when: order lookup, payment, invoice, or membership QR is needed.
-// Rules: keep white background and a readable quiet zone.
+// Rules: keep white background, quiet zone, and exact square dimensions.
 #let receipt-qr(qr, preset) = {
   if qr != none and "value" in qr {
     v(3mm)
     align(center)[
-      #box(width: preset.qr-size, height: preset.qr-size, fill: white, inset: 0pt, clip: true)[
-        #tiaoma.barcode(str(qr.value), "QRCode", width: preset.qr-size, height: preset.qr-size)
+      #block(breakable: false)[
+        #box(width: preset.qr-size + 3mm, height: preset.qr-size + 3mm, fill: white, inset: 1.5mm, clip: true)[
+          #tiaoma.barcode(str(qr.value), "QRCode", width: preset.qr-size, height: preset.qr-size)
+        ]
+        #linebreak()
+        #v(1mm)
+        #muted-text(get(qr, "label", default: "扫码查看订单"), size: 7.5pt)
       ]
-      #linebreak()
-      #text(size: 7pt)[#get(qr, "label", default: "扫码查看订单")]
     ]
   }
 }
@@ -282,10 +369,12 @@
 #let receipt-footer(lines, preset) = {
   if lines.len() > 0 {
     v(3mm)
-    for (index, line) in lines.enumerate() {
-      if index > 0 { v(1.4pt) }
-      align(center)[#safe-text(line, size: 7pt)]
-    }
+    block(width: 100%, breakable: false)[
+      #for (index, line) in lines.enumerate() {
+        if index > 0 { v(1.4pt) }
+        align(center)[#safe-text(line, size: 7.5pt)]
+      }
+    ]
   }
 }
 
@@ -293,7 +382,7 @@
 // Purpose: complete receipt composition.
 // Inputs: data, optional width.
 // Use when: generating a complete receipt template.
-// Rules: keep data fields business-level: store, order, callout, items, totals, payments, badges, qr, footer.
+// Rules: keep data fields business-level: store, order, callout, items, totals, payments, badges, qr, footer, note.
 #let receipt-document(data, width: 58mm) = {
   let preset = receipt-preset(width: width)
   safe-page(preset)[
@@ -301,6 +390,7 @@
     #receipt-callout(get(data, "callout", default: none), preset)
     #receipt-meta(get(data.order, "metadata", default: ()), preset)
     #receipt-items(get(data, "items", default: ()), preset)
+    #receipt-note(get(data, "note", default: none), preset)
     #receipt-summary(get(data, "totals", default: ()), preset)
     #receipt-meta(get(data, "payments", default: ()), preset)
     #receipt-badges(get(data, "badges", default: ()), preset)

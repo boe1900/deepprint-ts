@@ -15,7 +15,7 @@ import { Thread } from '@/components/assistant-ui/thread';
 import { ToolExecutionCard } from '@/components/assistant-ui/tool-execution-card';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import type { CompileFeedback } from '@/lib/typst-compile';
-import { getBundleData, getBundleTemplate, mergeTemplateBundleState, toTemplateBundleFiles, type TemplateBundleFiles } from '@/lib/template-bundle';
+import { getBundleData, getBundleTemplate, mergeTemplateBundleState, type TemplateBundleFiles } from '@/lib/template-bundle';
 import {
   applyTemplateBundlePatch,
   listTemplateBundlePatchFiles,
@@ -59,6 +59,7 @@ type ReadTemplateFileResult = {
 const TOOL_HISTORY_KEEP_MESSAGES = 12;
 const MAX_TEXT_PART_CHARS = 1200;
 const LEGACY_TEMPLATE_EDIT_TOOL_TYPES = new Set([
+  'tool-update_template_bundle',
   'tool-edit_template_bundle_file',
   'tool-edit_template_bundle_file_range',
   'tool-patch_template_bundle',
@@ -66,7 +67,6 @@ const LEGACY_TEMPLATE_EDIT_TOOL_TYPES = new Set([
 const LEGACY_REVISION_NOTE = '[历史旧版编辑工具状态已归档；当前模板编辑不再使用 revision，请以当前 TemplateBundle 快照为准。]';
 const LEGACY_REVISION_PATTERN = /expectedRevision|currentRevision|workspaceRevision|当前 revision|版本已过期|已经分叉|File has changed since read|File has not been read yet|Call read_template_bundle_file/i;
 const MUTATING_TEMPLATE_TOOL_TYPES = new Set([
-  'tool-update_template_bundle',
   'tool-apply_template_bundle_patch',
 ]);
 
@@ -187,77 +187,6 @@ const ToolkitProvider = ({ toolkit, children }: { toolkit: Toolkit; children: Re
   const parent = useAui();
   const aui = useAui({ tools: Tools({ toolkit }) }, { parent });
   return <AuiProvider value={aui}>{children}</AuiProvider>;
-};
-
-const UpdateTypstToolCard: ToolCallMessagePartComponent<Record<string, unknown>, UpdateTypstResult> = ({
-  status,
-  result,
-  argsText,
-}) => {
-  const statusType = status?.type ?? 'complete';
-  let shortArgs: { files?: TemplateBundleFiles } | null = null;
-  if (argsText) {
-    try {
-      shortArgs = JSON.parse(argsText) as { files?: TemplateBundleFiles };
-    } catch {
-      shortArgs = null;
-    }
-  }
-  const files = shortArgs?.files && typeof shortArgs.files === 'object' ? shortArgs.files : undefined;
-  const argsReady = Boolean(files);
-  const fileCount = files ? Object.keys(files).length : 0;
-  const errorText = getToolErrorText(status, result);
-  const isRunning = statusType === 'running';
-  const compileFailed = statusType === 'incomplete' || result?.ok === false;
-  const compileSucceeded = result?.ok === true;
-  const isDraftingArgs = isRunning && !argsReady && result === undefined;
-  const isExecutingTool = isRunning && argsReady && result === undefined;
-  const badgeTone = compileFailed
-    ? 'bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-300'
-    : compileSucceeded
-      ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300'
-      : isExecutingTool
-        ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300'
-        : isDraftingArgs
-          ? 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300'
-          : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300';
-  const badgeLabel = compileFailed
-    ? '编译失败'
-    : compileSucceeded
-      ? '编译通过'
-      : isExecutingTool
-        ? '编译预览中'
-        : isDraftingArgs
-          ? '生成参数中'
-          : statusType === 'requires-action'
-            ? '等待确认'
-            : '待执行';
-  const argsDetail = argsReady
-    ? `${fileCount} 个文件已生成`
-    : argsText
-      ? `正在流式接收工具参数，已接收 ${argsText.length} 字符`
-      : '等待模型生成完整 files map';
-  const steps = result?.steps ?? [];
-
-  return (
-    <ToolExecutionCard
-      title="应用模板修改"
-      badgeLabel={badgeLabel}
-      badgeTone={badgeTone}
-      prepareStep={{
-        label: '生成工具参数',
-        detail: argsDetail,
-        state: argsReady ? 'done' : isDraftingArgs ? 'active' : 'pending',
-      }}
-      runningStep={isExecutingTool ? {
-        label: '调用工具',
-        detail: '正在执行模板编译',
-        state: 'active',
-      } : undefined}
-      steps={steps}
-      errorText={errorText}
-    />
-  );
 };
 
 const PatchTemplateBundleToolCard: ToolCallMessagePartComponent<Record<string, unknown>, UpdateTypstResult> = ({
@@ -418,7 +347,7 @@ const readBundleFileLines = (
     content: numbered,
     plainContent,
     didModify: false,
-    reminder: '读取文件不会修改模板；如果用户要求变更，必须继续调用 apply_template_bundle_patch 或 update_template_bundle，且只有修改工具 ok=true 后才能说已经修正。',
+    reminder: '读取文件不会修改模板；如果用户要求变更，必须继续调用 apply_template_bundle_patch，且只有修改工具 ok=true 后才能说已经修正。',
   };
 };
 
@@ -503,77 +432,15 @@ export default function ChatPanel({
   // Single source of truth for the client-side tool: AssistantChatTransport
   // forwards this schema to /api/generate, then the browser executes it here.
   const toolkit = useMemo(() => defineToolkit({
-    update_template_bundle: {
-      type: 'frontend',
-      description: '应用并编译完整 TemplateBundle files map。仅用于首次生成、切换模板类型、或大范围重构；修复编译错误和小范围修改必须优先用 read_template_bundle_file + apply_template_bundle_patch。',
-      parameters: {
-        type: 'object',
-        properties: {
-          files: {
-            type: 'object',
-            description: '完整 TemplateBundle 文件映射，必须包含 manifest.json、template.typ、data.json、data.schema.json。template.typ 必须是原始 Typst 源码，不要包 Markdown 代码围栏。已有模板只需要局部修复时不要整份重写，必须改用 read_template_bundle_file + apply_template_bundle_patch。Typst 内容块 [...] 里函数/变量要写 #text/#str/#data；函数参数/code mode 里不要写 #align/#text；不要把 none 传给 text(fill)；窄小票金额/键值 grid 右列用固定宽度，不要用 auto。',
-            additionalProperties: { type: 'string' },
-          },
-        },
-        required: ['files'],
-        additionalProperties: false,
-      },
-      render: UpdateTypstToolCard,
-      execute: async (args: Record<string, unknown>) => {
-        if (!activeTemplateId) {
-          setAgentStatus('error');
-          return { ok: false, error: '请先在左侧选择一个模版' };
-        }
-
-        const baseFiles = workspaceSnapshotRef.current;
-        const files = toTemplateBundleFiles(
-          args.files,
-          getBundleTemplate(baseFiles),
-          getBundleData(baseFiles),
-        );
-        const nextCode = getBundleTemplate(files).trim();
-        const nextData = getBundleData(files);
-
-        if (!nextCode.trim()) {
-          setAgentStatus('error');
-          return { ok: false, error: 'template.typ 不能为空' };
-        }
-        if (!nextData || Object.keys(nextData).length === 0) {
-          setAgentStatus('error');
-          return { ok: false, error: 'data.json 不能为空，请同时返回与模板匹配的模拟数据' };
-        }
-
-        setAgentStatus(hasFailedOnce ? 'repairing' : 'compiling');
-        isApplyingToolRef.current = true;
-        let compileResult: CompileFeedback;
-        try {
-          compileResult = await onApplyAndValidate(files);
-        } finally {
-          isApplyingToolRef.current = false;
-        }
-        workspaceSnapshotRef.current = compileResult.files ?? files;
-        isApplyingToolRef.current = false;
-        if (compileResult.ok) {
-          setAgentStatus('success');
-          setHasFailedOnce(false);
-          autoToolLoopCountRef.current = 0;
-          return stripFilesFromCompileFeedback(compileResult);
-        }
-
-        setAgentStatus('error');
-        setHasFailedOnce(true);
-        return stripFilesFromCompileFeedback(compileResult);
-      },
-    },
     apply_template_bundle_patch: {
       type: 'frontend',
-      description: 'Codex-like 结构化 patch 工具，适合一次修改同一文件或多个文件中的若干小块。patch 始终应用到当前 TemplateBundle，通过上下文匹配定位。格式：*** Begin Patch / *** Update File: path / @@ optional anchor / 空格上下文行 / - 删除行 / + 新增行 / *** End Patch。不要包 Markdown 代码围栏。',
+      description: 'Codex-like 结构化 patch 工具，用于修改当前 TemplateBundle。模型可以自行决定补丁粒度，可局部修改、全量覆盖、新增或删除文件。格式：*** Begin Patch / *** Add File: path / +内容，或 *** Update File: path / @@ optional anchor / 空格上下文行 / - 删除行 / + 新增行，或 *** Delete File: path / *** End Patch。不要包 Markdown 代码围栏。',
       parameters: {
         type: 'object',
         properties: {
           patch: {
             type: 'string',
-            description: '原始结构化 patch 文本，不要包含 Markdown 代码围栏。只支持 *** Update File，不支持新增/删除/移动文件。',
+            description: '原始结构化 patch 文本，不要包含 Markdown 代码围栏。支持 *** Add File、*** Update File、*** Delete File；Add File 可创建或覆盖 bundle 内文件。',
           },
         },
         required: ['patch'],

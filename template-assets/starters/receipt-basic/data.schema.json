@@ -73,6 +73,9 @@
           },
           "amount": {
             "type": "string"
+          },
+          "formula": {
+            "type": "string"
           }
         },
         "additionalProperties": true
@@ -105,6 +108,9 @@
       "items": {
         "type": "object"
       }
+    },
+    "note": {
+      "type": "string"
     },
     "badges": {
       "type": "array",

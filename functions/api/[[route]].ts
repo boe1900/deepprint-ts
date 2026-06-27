@@ -78,16 +78,16 @@ const TYPST_SYSTEM_PROMPT = `你是 DeepPrint 的 Typst 模版编辑 Agent。
 工作方式：
 1. 只有在用户明确要求“修改/生成/应用模版”时，才调用修改工具。
 2. 当不需要修改时，只进行自然中文对话，不能调用工具。
-3. 首次生成、切换模板类型、或大范围重构时，调用 \`update_template_bundle\` 提交完整 TemplateBundle files map，至少包含 manifest.json、template.typ、data.json、data.schema.json。
-4. 修复编译错误、调整局部样式、或只改少量文本/几行代码时，按代码代理风格处理：先用 \`read_template_bundle_file\` 读取当前文件相关行，再调用 \`apply_template_bundle_patch\` 做局部修改。不要为一个小错误重写整个 template.typ。
+3. 所有模板写入都必须调用 \`apply_template_bundle_patch\`。它是唯一修改入口，可用于局部修改、全量覆盖、新增文件或删除文件。
+4. 修改前可用 \`read_template_bundle_file\` 读取当前文件内容、行号和上下文；读取工具只提供事实源，不会修改模板。
 5. 工具结果会返回编译结果：
    - \`ok=true\`：编译成功，可以给出简短说明并结束。
-   - \`ok=false\`：本次修改没有生效，严禁说“已修改/已编译通过/已完成”。必须根据 \`error\` 继续修复；若是局部错误，优先重新读取当前文件后再次调用 \`apply_template_bundle_patch\`。
-6. \`read_template_bundle_file\` 只读取，不会修改模板。读取成功后严禁说“已修正/已修改”；若用户要求变更，必须继续调用 \`apply_template_bundle_patch\` 或 \`update_template_bundle\`，且修改工具返回 \`ok=true\` 后才算完成。
-7. 如果某次 \`apply_template_bundle_patch\` 或 \`update_template_bundle\` 返回 \`ok=false\`，后续只调用 \`read_template_bundle_file\` 不能清除失败状态，必须再次调用修改工具并成功。
-8. \`apply_template_bundle_patch\` 必须使用原始 patch 文本，不要包 Markdown 代码围栏。格式为 \`*** Begin Patch\`、\`*** Update File: path\`、\`@@ optional anchor\`、空格上下文行、\`-\` 删除行、\`+\` 新增行、\`*** End Patch\`。patch 要尽量小，只包含必要上下文。patch 可以同时修改 template.typ、data.json、data.schema.json、manifest.json。
+   - \`ok=false\`：本次修改没有生效，严禁说“已修改/已编译通过/已完成”。必须根据 \`error\` 继续修复，并再次调用 \`apply_template_bundle_patch\`。
+6. \`read_template_bundle_file\` 只读取，不会修改模板。读取成功后严禁说“已修正/已修改”；若用户要求变更，必须继续调用 \`apply_template_bundle_patch\`，且修改工具返回 \`ok=true\` 后才算完成。
+7. 如果某次 \`apply_template_bundle_patch\` 返回 \`ok=false\`，后续只调用 \`read_template_bundle_file\` 不能清除失败状态，必须再次调用修改工具并成功。
+8. \`apply_template_bundle_patch\` 必须使用原始 patch 文本，不要包 Markdown 代码围栏。格式为 \`*** Begin Patch\`、一个或多个文件操作、\`*** End Patch\`。支持 \`*** Add File: path\`（内容行必须以 \`+\` 开头，可创建或覆盖文件）、\`*** Update File: path\`（支持 \`@@ optional anchor\`、空格上下文行、\`-\` 删除行、\`+\` 新增行）、\`*** Delete File: path\`。patch 可以同时修改 template.typ、data.json、data.schema.json、manifest.json。
 9. data.json 是完整模拟数据，字段必须与 data.schema.json 和 template.typ 一致。
-10. 优先保留用户已有结构，仅修改用户要求的部分。
+10. 围绕用户目标修改模板；patch 粒度由任务需要决定，可以局部修改，也可以全量覆盖。
 11. template.typ 通过 \`#let data = json("data.json")\` 读取数据，请确保代码可编译。
 12. 只要用户要求生成完整领域模板，或请求明显属于内置类型（小票、面单、试卷、商务文档、邀请函），必须按顺序显式调用工具：先 \`list_template_starters\`，再从返回列表中选择 starterId 调用 \`get_starter_context\`；不能直接手写整套 Typst。
 13. 必须基于 \`get_starter_context\` 返回的 starter、componentSource 和 designBrief 排版，优先内联/改造现有组件模式；只有 starter 和组件源码都覆盖不了时，才少量手写 Typst。
@@ -117,7 +117,7 @@ Typst 模式速查：
 const TYPST_QUICK_RULES = [
   '每次输出完整可编译 Typst 代码，不要省略必要的 #set / #let；最终模板必须自包含。',
   '不要编造函数参数；不确定参数时，优先采用更保守写法。',
-  '先复用已有变量名和结构，避免大范围重写。',
+  '基于当前 TemplateBundle 事实源修改；patch 粒度由任务需要决定，可局部也可全量覆盖。',
   '使用 data 时优先 data.at("key", default: "...") 兜底，避免缺字段报错。',
   '新增函数调用时，参数名和值保持简洁，避免传入未知参数。',
   '二维码需要保留白底与静区；条码/二维码只允许使用 @preview/tiaoma:0.3.0，优先复用 starter/componentSource 里已有写法。',
@@ -129,7 +129,8 @@ const TYPST_QUICK_RULES = [
   '不要把 none 传给 text(fill: ...)。可选颜色用 fill:auto 或先判断 fill != none。',
   '窄小票 grid 的右侧金额/键值列使用固定宽度，不要使用 auto。',
   'template.typ 只能是原始 Typst 文件内容，不要返回 Markdown 代码块围栏。',
-  '局部修复前先 read_template_bundle_file，再用 apply_template_bundle_patch。patch 可同时改多个文件，不需要每个文件都单独 read。',
+  '所有写入统一使用 apply_template_bundle_patch；patch 可局部修改、全量覆盖、新增或删除 bundle 文件。',
+  '修改前可先 read_template_bundle_file 获取当前内容；patch 可同时改多个文件，不需要每个文件都单独 read。',
   'read_template_bundle_file 只读不改；读取成功不能说已经修好。修改工具 ok=false 后，必须再次调用修改工具并 ok=true 才能结束。',
   '任何工具返回 ok=false 时，本次修改没有生效；严禁在最终回复里说已修改、已保存或编译通过。',
   '修改后若工具返回编译错误，必须基于失败草稿继续修复。',
@@ -423,12 +424,24 @@ const getBundleManifest = (context?: GenerateRequest['context']): Record<string,
   }
 }
 
-const inferDocumentTypeFromContext = (context: GenerateRequest['context'] | undefined, messages: GenerateRequest['messages']) => {
+const contextSearchText = (context: GenerateRequest['context'] | undefined, messages: GenerateRequest['messages']) => {
   const manifest = getBundleManifest(context)
-  const manifestType = typeof manifest.document_type === 'string' ? manifest.document_type : ''
-  if (manifestType) return manifestType
+  const manifestText = JSON.stringify(manifest)
+  const dataText = JSON.stringify(context?.base_data ?? {})
+  const files = context?.bundle_files && typeof context.bundle_files === 'object' && !Array.isArray(context.bundle_files)
+    ? context.bundle_files
+    : {}
+  const schemaText = typeof files['data.schema.json'] === 'string' ? files['data.schema.json'] : ''
+  return [
+    latestUserText(messages),
+    manifestText,
+    context?.base_typst || '',
+    dataText,
+    schemaText,
+  ].join('\n')
+}
 
-  const starterId = inferStarterId(`${latestUserText(messages)}\n${context?.base_typst || ''}`)
+const starterIdToDocumentType = (starterId?: string) => {
   if (starterId === 'receipt-basic') return 'receipt'
   if (starterId === 'shipping-label-basic') return 'shipping_label'
   if (starterId === 'exam-paper-basic') return 'exam_paper'
@@ -437,10 +450,19 @@ const inferDocumentTypeFromContext = (context: GenerateRequest['context'] | unde
   return ''
 }
 
+const inferDocumentTypeFromContext = (context: GenerateRequest['context'] | undefined, messages: GenerateRequest['messages']) => {
+  const manifest = getBundleManifest(context)
+  const manifestType = typeof manifest.document_type === 'string' ? manifest.document_type : ''
+  if (manifestType) return manifestType
+
+  return starterIdToDocumentType(inferStarterId(contextSearchText(context, messages)))
+}
+
 const buildDesignBriefSection = (documentType: string) => {
   const designBrief = documentType ? getDesignBriefForDocumentType(documentType) : ''
   if (!designBrief) return ''
   return `当前文档类型设计规范 (${documentType})：
+以下规范是模板排版的硬约束，不是参考文案。生成或修改模板时必须优先满足这些设计边界；如果与泛化排版习惯冲突，以本规范为准。
 ${designBrief}`
 }
 
@@ -555,14 +577,14 @@ const inferStarterId = (text: string) => {
   return matchers.find(([, keywords]) => keywords.some((keyword) => normalized.includes(keyword)))?.[0]
 }
 
-const buildStarterHintSection = (messages: GenerateRequest['messages']) => {
-  if (!inferStarterId(latestUserText(messages))) return ''
+const buildStarterHintSection = (context: GenerateRequest['context'] | undefined, messages: GenerateRequest['messages']) => {
+  if (!inferStarterId(contextSearchText(context, messages))) return ''
   return `用户请求疑似命中内置模板类型。
-首次生成完整模板时，在调用 update_template_bundle 前，必须按顺序显式调用工具：
+首次生成完整模板时，在应用 patch 前，必须按顺序显式调用工具：
 1. list_template_starters({})
 2. 从返回列表中选择最合适的 starterId，再调用 get_starter_context({ "starterId": "..." })
 不要跳过 list_template_starters，也不要只根据当前模板上下文直接手写整套 Typst。
-如果当前已经有模板，用户只是要求修复编译错误或做局部调整，必须先调用 read_template_bundle_file，再使用 apply_template_bundle_patch 局部修改，不要整份重写。`
+如果当前已经有模板，用户只是要求修复编译错误或做局部调整，可以先调用 read_template_bundle_file，再使用 apply_template_bundle_patch 修改。`
 }
 
 const aiStreamErrorMessage = (error: unknown) => {
@@ -620,7 +642,7 @@ app.post('/generate', requireAuth, async (c) => {
     const templateContextSection = buildTemplateContextSection(context)
     const documentType = inferDocumentTypeFromContext(context, messages)
     const designBriefSection = buildDesignBriefSection(documentType)
-    const starterHintSection = buildStarterHintSection(messages)
+    const starterHintSection = buildStarterHintSection(context, messages)
 
     const systemPrompt = `${TYPST_SYSTEM_PROMPT}
 

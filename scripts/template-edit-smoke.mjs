@@ -91,6 +91,62 @@ if (repeatedPatchResult.files['template.typ'] !== 'item: A\nstatus: new\nitem: A
   throw new Error(`ordered repeated patch failed: ${repeatedPatchResult.files['template.typ']}`);
 }
 
+const addPatchResult = assertOk(
+  applyTemplateBundlePatch({
+    'template.typ': 'old',
+    'data.json': '{}',
+  }, `*** Begin Patch
+*** Add File: data.schema.json
++{
++  "type": "object"
++}
+*** Add File: template.typ
++#let data = json("data.json")
++#text[full replacement]
+*** End Patch`),
+  'add and overwrite patch',
+);
+
+if (!addPatchResult.files['data.schema.json'].includes('"object"')) {
+  throw new Error('add patch did not create data.schema.json');
+}
+if (addPatchResult.files['template.typ'] !== '#let data = json("data.json")\n#text[full replacement]\n') {
+  throw new Error(`add patch did not overwrite template.typ: ${addPatchResult.files['template.typ']}`);
+}
+
+const deletePatchResult = assertOk(
+  applyTemplateBundlePatch({
+    'template.typ': 'keep',
+    'data.json': '{}',
+    'obsolete.typ': 'delete me',
+  }, `*** Begin Patch
+*** Delete File: obsolete.typ
+*** End Patch`),
+  'delete patch',
+);
+
+if ('obsolete.typ' in deletePatchResult.files) {
+  throw new Error('delete patch did not remove obsolete.typ');
+}
+
+const movePatchResult = assertOk(
+  applyTemplateBundlePatch({
+    'template.typ': 'alpha\nbeta\n',
+    'data.json': '{}',
+  }, `*** Begin Patch
+*** Update File: template.typ
+*** Move to: renamed.typ
+@@
+ beta
++gamma
+*** End Patch`),
+  'move patch',
+);
+
+if ('template.typ' in movePatchResult.files || movePatchResult.files['renamed.typ'] !== 'alpha\nbeta\ngamma\n') {
+  throw new Error(`move patch failed: ${JSON.stringify(movePatchResult.files)}`);
+}
+
 assertFail(
   applyTemplateBundlePatch({
     'template.typ': '#text[hello]',
@@ -111,6 +167,18 @@ assertFail(
 *** End Patch`),
   'rejects no-op patch',
   'match exactly',
+);
+
+assertFail(
+  applyTemplateBundlePatch({
+    'template.typ': 'same',
+    'data.json': '{}',
+  }, `*** Begin Patch
+*** Add File: ../escape.typ
++bad
+*** End Patch`),
+  'rejects parent path',
+  '..',
 );
 
 console.log('Template edit smoke passed');
